@@ -1,11 +1,11 @@
-"""Page 4: Episode Explorer · 逐 episode 查看。
+"""Page 4: Episode Explorer · per-episode browsing (bilingual zh/en).
 
-功能：
-- Episode 列表（可排序、可筛选）
-- Review Queue 优先展示
-- 点击查看详情（metrics、issues、diagnosis）
-- Your Decision 列（Keep / Remove / Uncertain）
-- Notes 输入框，决策持久化到 session_state
+Features:
+- Episode table (sortable, filterable)
+- Review Queue shown first
+- Click for details (metrics, issues, diagnosis)
+- Your Decision column (Keep / Remove / Uncertain)
+- Notes input, decisions persisted to session_state
 """
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from rda.ui_app.i18n import get_lang, t  # noqa: E402
+
 from components.common import (  # noqa: E402
     build_episodes_dataframe,
     get_verdict_badge,
@@ -31,9 +33,9 @@ from components.common import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def _render_review_queue(table_df: pd.DataFrame) -> None:
-    """渲染 Review Queue — 带有 Your Decision 列和快速决策按钮。"""
+    """Render the Review Queue with Your Decision column and quick-action buttons."""
     if table_df.empty:
-        st.info("没有需要审核的 episode")
+        st.info(t("ep_queue_no_items"))
         return
 
     for _, row in table_df.iterrows():
@@ -44,12 +46,12 @@ def _render_review_queue(table_df: pd.DataFrame) -> None:
         top_issues = row["top_issues"]
         num_frames = row["num_frames"]
 
-        # 取用户决策
+        # User decision
         user_v = st.session_state.user_verdicts.get(ep_id, {})
         user_decision = user_v.get("decision")
         user_notes = user_v.get("notes", "")
 
-        # 决策徽章
+        # Decision badge
         if user_decision == "KEEP":
             decision_badge = "🟢 **KEEP**"
         elif user_decision == "REMOVE":
@@ -57,9 +59,9 @@ def _render_review_queue(table_df: pd.DataFrame) -> None:
         elif user_decision == "UNCERTAIN":
             decision_badge = "🟡 **UNCERTAIN**"
         else:
-            decision_badge = "⚪ 未决策"
+            decision_badge = t("ep_queue_undecided")
 
-        # AI verdict 展示名称
+        # AI verdict display name
         ai_verdict_display = {"PASS": "KEEP", "REVIEW": "REVIEW", "EXCLUDE": "REMOVE"}.get(verdict, verdict)
 
         with st.expander(
@@ -71,16 +73,16 @@ def _render_review_queue(table_df: pd.DataFrame) -> None:
             col_info, col_actions = st.columns([2, 1])
 
             with col_info:
-                st.markdown(f"**帧数**: {num_frames}  ·  **Pattern Type**: `{pattern}`")
-                st.markdown(f"**主要问题**: {top_issues}")
+                st.markdown(f"{t('ep_frames')}: {num_frames}  ·  **Pattern Type**: `{pattern}`")
+                st.markdown(f"{t('ep_main_issues')}: {top_issues}")
 
-                # Notes 输入
+                # Notes input
                 notes_key = f"queue_notes_{ep_id}"
                 new_notes = st.text_area(
-                    "审核备注",
+                    t("ep_notes_label"),
                     value=user_notes,
                     height=60,
-                    placeholder="记录审核原因...",
+                    placeholder=t("ep_notes_placeholder"),
                     key=notes_key,
                     label_visibility="collapsed",
                 )
@@ -114,44 +116,52 @@ def _render_review_queue(table_df: pd.DataFrame) -> None:
                         "notes": new_notes,
                     }
                     st.rerun()
-                if st.button("📖 查看详情", key=f"q_detail_{ep_id}", use_container_width=True):
+                if st.button(t("ep_view_detail"), key=f"q_detail_{ep_id}", use_container_width=True):
                     st.session_state.selected_episode = ep_id
                     st.rerun()
 
 def _render_episode_table(table_df: pd.DataFrame, prefix: str) -> None:
-    """渲染 episode 列表表格（全部 Episodes 标签页使用）。"""
+    """Render the episode table (used by the All Episodes tab)."""
     if table_df.empty:
-        st.info("没有符合条件的 episode")
+        st.info(t("ep_table_empty"))
         return
+
+    col_ep = t("ep_col_episode")
+    col_verdict = t("ep_col_verdict")
+    col_integrity = t("ep_col_integrity")
+    col_behavior = t("ep_col_behavior")
+    col_pattern = t("ep_col_pattern")
+    col_frames = t("ep_col_frames")
+    col_issues = t("ep_col_issues")
 
     display_df = table_df[[
         "episode_id", "behavior_verdict", "integrity_check",
         "_view_score", "pattern_type", "num_frames", "top_issues",
     ]].copy()
 
-    # 美化列名
+    # Localized column names
     display_df.columns = [
-        "Episode #", "Verdict", "完整性", "Behavior Score", "Pattern Type",
-        "帧数", "主要问题",
+        col_ep, col_verdict, col_integrity, col_behavior,
+        col_pattern, col_frames, col_issues,
     ]
 
-    # 配置数据表格
+    # Data table
     st.dataframe(
         display_df,
         use_container_width=True,
         height=420,
         column_config={
-            "Episode #": st.column_config.NumberColumn(format="%d"),
-            "Verdict": st.column_config.TextColumn(),
-            "完整性": st.column_config.TextColumn(),
-            "Behavior Score": st.column_config.NumberColumn(format="%.2f"),
-            "帧数": st.column_config.NumberColumn(format="%d"),
+            col_ep: st.column_config.NumberColumn(format="%d"),
+            col_verdict: st.column_config.TextColumn(),
+            col_integrity: st.column_config.TextColumn(),
+            col_behavior: st.column_config.NumberColumn(format="%.2f"),
+            col_frames: st.column_config.NumberColumn(format="%d"),
         },
         hide_index=True,
         key=f"episode_table_{prefix}",
     )
 
-    # Episode 选择器
+    # Episode selector
     col1, col2 = st.columns([2, 1])
     with col1:
         ep_options = [f"Episode #{row['episode_id']} · {row['behavior_verdict']}"
@@ -159,7 +169,7 @@ def _render_episode_table(table_df: pd.DataFrame, prefix: str) -> None:
         ep_indices = table_df["episode_id"].tolist()
         if ep_indices:
             selected = st.selectbox(
-                "选择 episode 查看详情",
+                t("ep_select_detail"),
                 options=range(len(ep_indices)),
                 format_func=lambda i: ep_options[i],
                 key=f"detail_select_{prefix}",
@@ -169,31 +179,31 @@ def _render_episode_table(table_df: pd.DataFrame, prefix: str) -> None:
     with col2:
         st.write("")
         st.write("")
-        if st.button("📖 查看详情", type="primary", key=f"view_detail_{prefix}"):
+        if st.button(t("ep_view_detail"), type="primary", key=f"view_detail_{prefix}"):
             st.session_state.selected_episode = ep_indices[selected]
             st.rerun()
 
 def _render_episode_detail(ep_id: int) -> None:
-    """渲染单个 episode 的详情面板。"""
+    """Render the detail panel of a single episode."""
     st.divider()
-    st.subheader(f"🔍 Episode #{ep_id} 详情")
+    st.subheader(t("ep_detail_title", ep=ep_id))
 
     ep_result = result.episodes.get(ep_id)
     if ep_result is None:
-        st.error(f"未找到 Episode #{ep_id}")
+        st.error(t("ep_not_found", ep=ep_id))
         return
 
-    # 找到对应的行
+    # Find the matching row
     ep_row = df[df["episode_id"] == ep_id].iloc[0] if not df[df["episode_id"] == ep_id].empty else None
 
-    # 双组件：Integrity + Behavior
+    # Two panels: Integrity + Behavior
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("### 数据完整性 (Layer 1A)")
+        st.markdown(f"### {t('ep_integrity_header')}")
         integrity_pass = ep_row["integrity_check"] == "PASS" if ep_row is not None else True
         emoji = "🟢" if integrity_pass else "🔴"
-        status_text = "PASS · 无硬检查问题" if integrity_pass else "FAIL · 存在完整性问题"
+        status_text = t("ep_integrity_pass") if integrity_pass else t("ep_integrity_fail")
         st.markdown(f"""
         <div style="padding: 16px; border-radius: 10px; background: {'#dcfce7' if integrity_pass else '#fee2e2'}; color: {'#166534' if integrity_pass else '#991b1b'};">
             <div style="font-size: 24px; font-weight: 700;">{emoji} {status_text}</div>
@@ -201,26 +211,26 @@ def _render_episode_detail(ep_id: int) -> None:
         """, unsafe_allow_html=True)
 
         if ep_row is not None and ep_row["integrity_issues"] != "—":
-            st.caption("存在的问题：")
+            st.caption(t("ep_integrity_issues"))
             for issue in str(ep_row["integrity_issues"]).split(", "):
                 st.warning(f"🔴 {issue}")
 
     with col2:
-        st.markdown("### 行为质量 (Layer 1B)")
+        st.markdown(f"### {t('ep_behavior_header')}")
         verdict = ep_result.verdict.value
         emoji_v, color_v = get_verdict_badge(verdict)
-        verdict_label = {"PASS": "KEEP · 建议保留",
-                         "REVIEW": "REVIEW · 建议人工审核",
-                         "EXCLUDE": "REMOVE · 建议排除"}.get(verdict, verdict)
+        verdict_label = {"PASS": t("ep_verdict_keep"),
+                         "REVIEW": t("ep_verdict_review"),
+                         "EXCLUDE": t("ep_verdict_exclude")}.get(verdict, verdict)
         sev_score = ep_row['_view_score'] if ep_row is not None else '—'
 
-        # 多维度评分展示
+        # Multi-dimension scores
         portable_s = ep_row.get('portable_score') if ep_row is not None else None
         platform_s = ep_row.get('platform_score') if ep_row is not None else None
         combined_s = ep_row.get('combined_score') if ep_row is not None else None
         has_plat = bool(ep_row.get('has_platform_metrics')) if ep_row is not None else False
 
-        score_lines = [f"Issue Severity Score: {sev_score}"]
+        score_lines = [t("ep_score_severity", v=sev_score)]
         if portable_s is not None:
             score_lines.append(f"Portable Score: {portable_s:.2f}")
         if has_plat and platform_s is not None:
@@ -244,8 +254,13 @@ def _render_episode_detail(ep_id: int) -> None:
 
     st.divider()
 
-    # Metrics 详情
-    st.markdown("### 📊 各项指标详情")
+    # Metrics detail
+    st.markdown(f"### {t('ep_metrics_header')}")
+
+    col_metric = t("ep_col_metric")
+    col_status = t("ep_col_status")
+    col_value = t("ep_col_value")
+    col_note = t("ep_col_note")
 
     metric_rows = []
     for m_name, m in sorted(ep_result.metrics.items()):
@@ -253,24 +268,24 @@ def _render_episode_detail(ep_id: int) -> None:
             status = "✅ PASS" if not m.has_finding else "⚠️ FLAGGED"
             measurement_str = _format_measurement(m.measurement)
             metric_rows.append({
-                "指标": m_name,
-                "状态": status,
-                "测量值": measurement_str,
-                "说明": m.message or m.assessment.get("reason", ""),
+                col_metric: m_name,
+                col_status: status,
+                col_value: measurement_str,
+                col_note: m.message or m.assessment.get("reason", ""),
             })
         elif m.availability.value == "not_available":
             metric_rows.append({
-                "指标": m_name,
-                "状态": "N/A",
-                "测量值": "—",
-                "说明": m.assessment.get("reason", "数据不可用"),
+                col_metric: m_name,
+                col_status: "N/A",
+                col_value: "—",
+                col_note: m.assessment.get("reason", t("ep_na_reason")),
             })
         else:
             metric_rows.append({
-                "指标": m_name,
-                "状态": "ERROR",
-                "测量值": "—",
-                "说明": m.assessment.get("reason", "计算出错"),
+                col_metric: m_name,
+                col_status: "ERROR",
+                col_value: "—",
+                col_note: m.assessment.get("reason", t("ep_error_reason")),
             })
 
     metric_df = pd.DataFrame(metric_rows)
@@ -279,69 +294,69 @@ def _render_episode_detail(ep_id: int) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "指标": st.column_config.TextColumn(width="small"),
-            "状态": st.column_config.TextColumn(width="small"),
-            "测量值": st.column_config.TextColumn(width="medium"),
-            "说明": st.column_config.TextColumn(width="large"),
+            col_metric: st.column_config.TextColumn(width="small"),
+            col_status: st.column_config.TextColumn(width="small"),
+            col_value: st.column_config.TextColumn(width="medium"),
+            col_note: st.column_config.TextColumn(width="large"),
         },
     )
 
-    # 诊断
-    st.markdown("### 💡 诊断与建议")
+    # Diagnosis
+    st.markdown(f"### {t('ep_diag_header')}")
 
     if ep_result.verdict.value == "PASS":
-        st.success("该 episode 各项指标正常，无明显质量问题。")
+        st.success(t("ep_diag_normal"))
     else:
         diagnosis = _generate_diagnosis(ep_result, ep_row)
         with st.container():
-            st.markdown(f"**WHAT · 问题描述**")
+            st.markdown(t("ep_diag_what"))
             st.info(diagnosis["what"])
-            st.markdown(f"**WHY · 原因分析**")
+            st.markdown(t("ep_diag_why"))
             st.warning(diagnosis["why"])
-            st.markdown(f"**NEXT · 处理建议**")
+            st.markdown(t("ep_diag_next"))
             st.success(diagnosis["next"])
 
     st.divider()
 
     # ──────────────────────────────────────────────────────────────────────
-    # 轨迹可视化 (Trajectory Visualization)
+    # Trajectory Visualization
     # ──────────────────────────────────────────────────────────────────────
     _render_trajectory_visualization(ep_id, ep_result, ep_row)
 
     st.divider()
 
-    # 用户决策（Review Queue 核心功能）
-    st.markdown("### ✍️ 人工审核决策 · Your Decision")
+    # User decision (core Review Queue feature)
+    st.markdown(f"### {t('ep_decision_header')}")
 
     current = st.session_state.user_verdicts.get(ep_id, {"decision": None, "notes": ""})
     current_decision = current.get("decision")
     current_notes = current.get("notes", "")
 
-    # 决策按钮
+    # Decision buttons
     col_k, col_r, col_u = st.columns(3)
     with col_k:
         keep_pressed = st.button(
-            "✅ KEEP · 保留",
+            t("ep_btn_keep"),
             type="primary" if current_decision == "KEEP" else "secondary",
             use_container_width=True,
             key=f"btn_keep_{ep_id}",
-            help="确认该 episode 可用于训练",
+            help=t("ep_btn_keep_help"),
         )
     with col_r:
         remove_pressed = st.button(
-            "🗑️ REMOVE · 排除",
+            t("ep_btn_remove"),
             type="primary" if current_decision == "REMOVE" else "secondary",
             use_container_width=True,
             key=f"btn_remove_{ep_id}",
-            help="确认该 episode 应从训练集中排除",
+            help=t("ep_btn_remove_help"),
         )
     with col_u:
         uncertain_pressed = st.button(
-            "❓ UNCERTAIN · 存疑",
+            t("ep_btn_uncertain"),
             type="primary" if current_decision == "UNCERTAIN" else "secondary",
             use_container_width=True,
             key=f"btn_uncertain_{ep_id}",
-            help="暂时标记为存疑，待进一步确认",
+            help=t("ep_btn_uncertain_help"),
         )
 
     if keep_pressed:
@@ -349,67 +364,67 @@ def _render_episode_detail(ep_id: int) -> None:
             "decision": "KEEP",
             "notes": current_notes,
         }
-        st.success(f"Episode #{ep_id} 已标记为 KEEP（保留）")
+        st.success(t("ep_marked_keep", ep=ep_id))
         st.rerun()
     if remove_pressed:
         st.session_state.user_verdicts[ep_id] = {
             "decision": "REMOVE",
             "notes": current_notes,
         }
-        st.error(f"Episode #{ep_id} 已标记为 REMOVE（排除）")
+        st.error(t("ep_marked_remove", ep=ep_id))
         st.rerun()
     if uncertain_pressed:
         st.session_state.user_verdicts[ep_id] = {
             "decision": "UNCERTAIN",
             "notes": current_notes,
         }
-        st.warning(f"Episode #{ep_id} 已标记为 UNCERTAIN（存疑）")
+        st.warning(t("ep_marked_uncertain", ep=ep_id))
         st.rerun()
 
-    # 当前决策状态展示
+    # Current decision status
     if current_decision:
-        badge = {"KEEP": ("🟢", "#10b981", "保留"),
-                 "REMOVE": ("🔴", "#ef4444", "排除"),
-                 "UNCERTAIN": ("🟡", "#f59e0b", "存疑")}.get(current_decision, ("⚪", "#9ca3af", ""))
-        st.caption(f"当前决策：<span style='color:{badge[1]}; font-weight:600;'>{badge[0]} {current_decision} · {badge[2]}</span>",
+        badge = {"KEEP": ("🟢", "#10b981", t("ep_badge_keep")),
+                 "REMOVE": ("🔴", "#ef4444", t("ep_badge_remove")),
+                 "UNCERTAIN": ("🟡", "#f59e0b", t("ep_badge_uncertain"))}.get(current_decision, ("⚪", "#9ca3af", ""))
+        st.caption(f"{t('ep_current_decision')}<span style='color:{badge[1]}; font-weight:600;'>{badge[0]} {current_decision} · {badge[2]}</span>",
                    unsafe_allow_html=True)
     else:
-        st.caption("当前状态：未决策")
+        st.caption(t("ep_no_decision"))
 
-    # Notes 输入框
+    # Notes input
     notes_val = st.text_area(
-        "审核备注（可选）",
+        t("ep_notes_area"),
         value=current_notes,
         height=80,
-        placeholder="记录审核原因、上下文或后续动作...",
+        placeholder=t("ep_notes_area_placeholder"),
         key=f"notes_{ep_id}",
     )
 
     col_save, col_clear = st.columns([1, 1])
     with col_save:
-        if st.button("💾 保存备注", key=f"save_notes_{ep_id}", use_container_width=True):
+        if st.button(t("ep_save_notes"), key=f"save_notes_{ep_id}", use_container_width=True):
             existing = st.session_state.user_verdicts.get(ep_id, {"decision": None, "notes": ""})
             st.session_state.user_verdicts[ep_id] = {
                 "decision": existing.get("decision"),
                 "notes": notes_val,
             }
-            st.success("备注已保存")
+            st.success(t("ep_notes_saved"))
             st.rerun()
     with col_clear:
-        if st.button("🗑️ 清除决策", key=f"clear_verdict_{ep_id}", use_container_width=True):
+        if st.button(t("ep_clear_decision"), key=f"clear_verdict_{ep_id}", use_container_width=True):
             if ep_id in st.session_state.user_verdicts:
                 del st.session_state.user_verdicts[ep_id]
-            st.info("决策已清除")
+            st.info(t("ep_decision_cleared"))
             st.rerun()
 
-    # 关闭按钮
-    if st.button("关闭详情", key="close_detail"):
+    # Close button
+    if st.button(t("ep_close_detail"), key="close_detail"):
         st.session_state.selected_episode = None
         st.rerun()
 
-@st.cache_data(show_spinner="正在加载 episode 原始数据...")
+@st.cache_data(show_spinner=t("ep_traj_loading"))
 def _load_episode_data(dataset_path: str, episode_index: int):
-    """加载单个 episode 的原始数据（带缓存）。"""
+    """Load raw data of a single episode (cached)."""
     from rda.io.lerobot_loader import iter_episodes
 
     for ep in iter_episodes(dataset_path):
@@ -418,32 +433,32 @@ def _load_episode_data(dataset_path: str, episode_index: int):
     return None
 
 def _render_trajectory_visualization(ep_id, ep_result, ep_row):
-    """渲染轨迹可视化区域（State / Action 时序图 + 异常高亮）。"""
-    st.markdown("### 📈 轨迹可视化")
+    """Render trajectory visualization (State / Action time series with anomaly highlights)."""
+    st.markdown(f"### {t('ep_traj_header')}")
 
     dataset_path = st.session_state.get("dataset_path")
     if not dataset_path:
-        st.info("💡 数据集路径未设置，无法加载原始轨迹数据")
+        st.info(t("ep_traj_no_path"))
         return
 
     try:
         episode_data = _load_episode_data(str(dataset_path), int(ep_id))
     except Exception as e:
-        st.warning(f"⚠️ 加载轨迹数据失败：{e}")
+        st.warning(t("ep_traj_load_err", err=e))
         return
 
     if episode_data is None:
-        st.warning(f"⚠️ 未找到 Episode #{ep_id} 的原始数据")
+        st.warning(t("ep_traj_not_found", ep=ep_id))
         return
 
     has_state = bool(episode_data.observation)
     has_action = bool(episode_data.action)
 
     if not has_state and not has_action:
-        st.info("该 episode 没有 state 或 action 数据，跳过可视化")
+        st.info(t("ep_traj_no_data"))
         return
 
-    # 选择显示模式
+    # Display mode selection
     view_options = []
     if has_state:
         view_options.append("State")
@@ -453,17 +468,17 @@ def _render_trajectory_visualization(ep_id, ep_result, ep_row):
         view_options.append("Both")
 
     selected_view = st.selectbox(
-        "显示模式",
+        t("ep_traj_view_label"),
         options=view_options,
-        index=len(view_options) - 1,  # 默认选 Both（如果有）
+        index=len(view_options) - 1,  # default Both (if available)
         key=f"traj_view_{ep_id}",
     )
 
-    # 时间轴
+    # Timeline
     timestamps = episode_data.timestamps
     joint_limits = episode_data.meta.get("joint_limits") if episode_data.meta else None
 
-    # 收集异常区间
+    # Collect anomaly regions
     anomaly_regions = _collect_anomaly_regions(ep_result, episode_data.num_frames)
 
     show_state = selected_view in ("State", "Both") and has_state
@@ -473,7 +488,7 @@ def _render_trajectory_visualization(ep_id, ep_result, ep_row):
         _plot_timeseries(
             data_dict=episode_data.observation,
             timestamps=timestamps,
-            title="Joint States 时序图",
+            title=t("ep_traj_state_title"),
             ep_id=ep_id,
             suffix="state",
             joint_limits=joint_limits,
@@ -484,7 +499,7 @@ def _render_trajectory_visualization(ep_id, ep_result, ep_row):
         _plot_timeseries(
             data_dict=episode_data.action,
             timestamps=timestamps,
-            title="Actions 时序图",
+            title=t("ep_traj_action_title"),
             ep_id=ep_id,
             suffix="action",
             joint_limits=joint_limits,
@@ -492,7 +507,7 @@ def _render_trajectory_visualization(ep_id, ep_result, ep_row):
         )
 
 def _collect_anomaly_regions(ep_result, num_frames: int):
-    """从审计结果中提取异常区间，用于在图上高亮。
+    """Extract anomaly regions from audit results for chart highlighting.
 
     Returns:
         List of (start_frame, end_frame, label) tuples.
@@ -503,16 +518,16 @@ def _collect_anomaly_regions(ep_result, num_frames: int):
         if m.passed:
             continue
 
-        # action_discontinuity — 标记动作跳变较大的帧区间
+        # action_discontinuity — mark frames with large action jumps
         if "discontinuity" in m_name and m.measurement:
             spike_frames = m.measurement.get("spike_frames", [])
-            window = max(1, num_frames // 100)  # ±1% 窗口
+            window = max(1, num_frames // 100)  # ±1% window
             for frame_idx in spike_frames:
                 start = max(0, int(frame_idx) - window)
                 end = min(num_frames - 1, int(frame_idx) + window)
                 regions.append((start, end, m_name))
 
-        # spike 相关指标
+        # spike-related metrics
         if "spike" in m_name and m.measurement:
             spike_indices = m.measurement.get("spike_indices", [])
             window = max(1, num_frames // 100)
@@ -532,10 +547,10 @@ def _plot_timeseries(
     joint_limits=None,
     anomaly_regions=None,
 ):
-    """绘制时序图（State 或 Action），支持关节限制线和异常高亮。"""
+    """Plot a time-series chart (State or Action) with joint-limit lines and anomaly highlights."""
     fig = go.Figure()
 
-    # 绘制每个维度的曲线
+    # One curve per dimension
     for key, arr in data_dict.items():
         if arr.ndim == 1:
             fig.add_trace(go.Scatter(
@@ -555,7 +570,7 @@ def _plot_timeseries(
                     line=dict(width=1.5),
                 ))
 
-    # 关节限制虚线
+    # Joint-limit dashed lines
     if joint_limits is not None:
         if isinstance(joint_limits, (list, np.ndarray)) and len(joint_limits) > 0:
             jl = np.array(joint_limits)
@@ -570,7 +585,7 @@ def _plot_timeseries(
                             opacity=0.4,
                         )
 
-    # 异常区域红色背景高亮
+    # Red background highlight for anomaly regions
     if anomaly_regions:
         for start, end, label in anomaly_regions:
             fig.add_vrect(
@@ -585,9 +600,9 @@ def _plot_timeseries(
 
     fig.update_layout(
         title=f"{title}  ·  Episode #{ep_id}",
-        xaxis_title="时间 (s)",
-        yaxis_title="值",
-        legend_title="维度",
+        xaxis_title=t("ep_traj_time_axis"),
+        yaxis_title=t("ep_traj_value_axis"),
+        legend_title=t("ep_traj_legend"),
         hovermode="x unified",
         height=350,
         margin=dict(l=40, r=20, t=40, b=30),
@@ -596,7 +611,7 @@ def _plot_timeseries(
     st.plotly_chart(fig, use_container_width=True, key=f"traj_{suffix}_{ep_id}")
 
 def _format_measurement(measurement: dict) -> str:
-    """将 measurement dict 格式化为可读字符串。"""
+    """Format a measurement dict into a readable string."""
     if not measurement:
         return "—"
     parts = []
@@ -610,11 +625,11 @@ def _format_measurement(measurement: dict) -> str:
     return " · ".join(parts[:5]) if parts else "—"
 
 def _generate_diagnosis(ep_result, ep_row) -> dict:
-    """生成三层诊断（WHAT / WHY / NEXT）。"""
+    """Generate the three-layer diagnosis (WHAT / WHY / NEXT)."""
     pattern = ep_row["pattern_type"] if ep_row is not None else None
     sev_score = ep_row["_view_score"] if ep_row is not None else 0
 
-    # 收集失败的 metrics
+    # Collect failed metrics
     failed_metrics = []
     for m_name, m in ep_result.metrics.items():
         if m.availability.value == "available" and not m.passed:
@@ -624,100 +639,95 @@ def _generate_diagnosis(ep_result, ep_row) -> dict:
     why_parts = []
     next_parts = []
 
-    # Integrity 问题
+    # Integrity issues
     critical_failed = [m for m in failed_metrics if m in {
         "missing_dropout", "invalid_values", "schema_consistency",
         "timestamp_validity", "joint_limit",
     }]
     if critical_failed:
-        what_parts.append(f"完整性检查未通过（{', '.join(critical_failed)}）")
-        why_parts.append("数据采集或存储过程中出现确定性错误")
-        next_parts.append("检查数据采集管线，修复后重新采集")
+        what_parts.append(t("diag_integrity_what", metrics=", ".join(critical_failed)))
+        why_parts.append(t("diag_integrity_why"))
+        next_parts.append(t("diag_integrity_next"))
 
-    # Behavior 问题
+    # Behavior issues
     if "action_discontinuity" in failed_metrics:
-        what_parts.append("动作不连续性异常偏高")
-        why_parts.append("可能是控制器抖动或传感器噪声")
-        next_parts.append("检查控制器参数或动作平滑处理")
+        what_parts.append(t("diag_disc_what"))
+        why_parts.append(t("diag_disc_why"))
+        next_parts.append(t("diag_disc_next"))
 
     if "idle_ratio" in failed_metrics:
-        what_parts.append("有效运动比例偏低")
-        why_parts.append("机器人可能长时间处于停顿或等待状态")
-        next_parts.append("检查是否为任务失败，考虑重采")
+        what_parts.append(t("diag_idle_what"))
+        why_parts.append(t("diag_idle_why"))
+        next_parts.append(t("diag_idle_next"))
 
     if "velocity_acceleration" in failed_metrics:
-        what_parts.append("速度/加速度超出正常范围")
-        why_parts.append("动作过于激进或轨迹异常")
-        next_parts.append("检查示教数据或控制器增益")
+        what_parts.append(t("diag_vel_what"))
+        why_parts.append(t("diag_vel_why"))
+        next_parts.append(t("diag_vel_next"))
 
     if "distribution" in failed_metrics:
-        what_parts.append("轨迹分布偏离参考分布")
-        why_parts.append("可能是任务执行方式不同或异常行为")
-        next_parts.append("人工确认是否为有效但罕见的行为模式")
+        what_parts.append(t("diag_dist_what"))
+        why_parts.append(t("diag_dist_why"))
+        next_parts.append(t("diag_dist_next"))
 
     if not what_parts:
-        what_parts.append(f"Issue Severity Score {sev_score:.2f}，略高于参考分布")
-        why_parts.append("多项指标轻微异常的累积效应")
-        next_parts.append("建议人工确认是否影响训练质量")
+        what_parts.append(t("diag_generic_what", score=sev_score))
+        why_parts.append(t("diag_generic_why"))
+        next_parts.append(t("diag_generic_next"))
 
+    sep = "；" if get_lang() == "zh" else "; "
     return {
-        "what": "；".join(what_parts),
-        "why": "；".join(why_parts) if why_parts else "具体原因需结合数据上下文分析",
-        "next": "；".join(next_parts) if next_parts else "人工审核后决定保留或排除",
+        "what": sep.join(what_parts),
+        "why": sep.join(why_parts) if why_parts else t("diag_why_fallback"),
+        "next": sep.join(next_parts) if next_parts else t("diag_next_fallback"),
     }
 
 
 
-st.title("📋 Episode Explorer · 逐集查看")
-st.caption("浏览每个 episode 的审计结果、问题类型和诊断详情，并记录人工审核决策")
+st.title(t("ep_title"))
+st.caption(t("ep_caption"))
 
 # ---------------------------------------------------------------------------
-# 前置检查
+# Preconditions
 # ---------------------------------------------------------------------------
 if st.session_state.audit_result is None:
-    st.warning("⚠️ 请先运行审计", icon="🔍")
-    st.page_link("pages/2_Audit.py", label="前往 Audit 页面 →", icon="🔍")
+    st.warning(t("not_audited"), icon="🔍")
+    st.page_link("pages/2_Audit.py", label=t("go_audit"), icon="🔍")
     st.stop()
 
 result = st.session_state.audit_result
 
-# 确保 episodes_df 存在
+# Make sure episodes_df exists (language-aware)
 if st.session_state.episodes_df is None:
-    st.session_state.episodes_df = build_episodes_dataframe(result)
+    st.session_state.episodes_df = build_episodes_dataframe(result, lang=get_lang())
 
 df = st.session_state.episodes_df
 
-# 确保 user_verdicts 存在（防御性，app.py 中已初始化）
+# Make sure user_verdicts exists (defensive; initialized in app.py)
 if "user_verdicts" not in st.session_state:
     st.session_state.user_verdicts = {}
 
 # ---------------------------------------------------------------------------
-# 评分视图切换（Portable / Platform-specific / Combined）
+# Score view switch (Portable / Platform-specific / Combined)
 # ---------------------------------------------------------------------------
 _has_platform = bool(df["has_platform_metrics"].any()) if not df.empty else False
 
-_score_view_options = ["Portable Core (跨平台)", "Combined (深度分析)"]
+_score_view_options = [t("ep_view_portable"), t("ep_view_combined")]
 _score_view_keys = ["portable_score", "combined_score"]
 if _has_platform:
-    _score_view_options.insert(1, "Platform-specific (同平台)")
+    _score_view_options.insert(1, t("ep_view_platform"))
     _score_view_keys.insert(1, "platform_score")
 
 score_view_label = st.radio(
-    "📊 行为评分视图",
+    t("ep_score_view"),
     options=_score_view_options,
-    index=0,  # 默认 Portable Core
+    index=0,  # default Portable Core
     horizontal=True,
-    help=(
-        "Portable Core：仅使用跨平台通用指标（duration / spike / effective_motion），"
-        "适用于跨平台比较。\n"
-        "Platform-specific：仅使用平台特有指标（velocity / path_length 等），"
-        "仅在同一平台下有意义。\n"
-        "Combined：所有指标综合，用于同平台深度分析。"
-    ),
+    help=t("ep_score_view_help"),
 )
 _score_view_key = _score_view_keys[_score_view_options.index(score_view_label)]
 
-# 动态计算当前视图下的 deviation_score（用于排序和展示）
+# Dynamically compute deviation_score for the current view (sorting & display)
 if not df.empty and df[_score_view_key].notna().any():
     df = df.copy()
     df["_view_score"] = df[_score_view_key].fillna(df["deviation_score"])
@@ -726,14 +736,14 @@ else:
     df["_view_score"] = df["deviation_score"]
 
 # ---------------------------------------------------------------------------
-# 统计概览
+# Stats overview
 # ---------------------------------------------------------------------------
 total = len(df)
 keep_count = len(df[df["behavior_verdict"] == "PASS"])
 review_count = len(df[df["behavior_verdict"] == "REVIEW"])
 remove_count = len(df[df["behavior_verdict"] == "EXCLUDE"])
 
-# 已决策统计
+# Decision stats
 verdicts = st.session_state.user_verdicts
 decided_count = sum(1 for v in verdicts.values() if v.get("decision"))
 user_keep = sum(1 for v in verdicts.values() if v.get("decision") == "KEEP")
@@ -742,57 +752,59 @@ user_uncertain = sum(1 for v in verdicts.values() if v.get("decision") == "UNCER
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("总 Episodes", total)
+    st.metric(t("ep_metric_total"), total)
 with col2:
-    st.metric("🟢 KEEP (AI)", keep_count)
+    st.metric(t("ep_metric_keep_ai"), keep_count)
 with col3:
-    st.metric("🟡 REVIEW (AI)", review_count)
+    st.metric(t("ep_metric_review_ai"), review_count)
 with col4:
-    st.metric("🔴 REMOVE (AI)", remove_count)
+    st.metric(t("ep_metric_remove_ai"), remove_count)
 
-# 人工审核进度
+# Manual review progress
 st.caption(
-    f"人工审核进度：**{decided_count} / {review_count + remove_count}** "
-    f"（KEEP: {user_keep} · REMOVE: {user_remove} · UNCERTAIN: {user_uncertain}）"
+    t("ep_review_progress",
+      decided=decided_count, need=review_count + remove_count,
+      keep=user_keep, remove=user_remove, uncertain=user_uncertain)
 )
 
 # ---------------------------------------------------------------------------
-# Review Queue 标签
+# Review Queue tab
 # ---------------------------------------------------------------------------
-tab_queue, tab_all = st.tabs(["🚨 Review Queue（优先处理）", "📋 全部 Episodes"])
+tab_queue, tab_all = st.tabs([t("ep_tab_queue"), t("ep_tab_all")])
 
 with tab_queue:
     queue_df = df[df["behavior_verdict"].isin(["EXCLUDE", "REVIEW"])].copy()
     if queue_df.empty:
-        st.success("🎉 没有需要审核的 episode，数据集质量良好")
+        st.success(t("ep_queue_empty"))
     else:
         st.info(
-            f"共 **{len(queue_df)}** 个 episode 需要关注 "
-            f"（{len(queue_df[queue_df['behavior_verdict'] == 'EXCLUDE'])} 个 REMOVE（AI建议），"
-            f"{len(queue_df[queue_df['behavior_verdict'] == 'REVIEW'])} 个 REVIEW）",
+            t("ep_queue_info",
+              n=len(queue_df),
+              rm=len(queue_df[queue_df['behavior_verdict'] == 'EXCLUDE']),
+              rv=len(queue_df[queue_df['behavior_verdict'] == 'REVIEW'])),
             icon="⚠️",
         )
         _render_review_queue(queue_df)
 
 with tab_all:
-    # 筛选器
+    # Filters
     col1, col2, col3 = st.columns(3)
     with col1:
         verdict_filter = st.multiselect(
-            "Verdict 筛选",
+            t("ep_filter_verdict"),
             options=["PASS", "REVIEW", "EXCLUDE"],
             default=["PASS", "REVIEW", "EXCLUDE"],
             format_func=lambda x: {"PASS": "KEEP", "REVIEW": "REVIEW", "EXCLUDE": "REMOVE"}.get(x, x),
         )
     with col2:
         integrity_filter = st.multiselect(
-            "完整性筛选",
+            t("ep_filter_integrity"),
             options=["PASS", "FAIL"],
             default=["PASS", "FAIL"],
         )
     with col3:
         pattern_filter = st.multiselect(
-            "Pattern Type 筛选",
+            t("ep_filter_pattern"),
             options=[p for p in df["pattern_type"].unique() if p != "—"],
             default=[],
         )
@@ -802,12 +814,12 @@ with tab_all:
     if pattern_filter:
         filtered = filtered[filtered["pattern_type"].isin(pattern_filter)]
 
-    st.caption(f"显示 {len(filtered)} / {total} 个 episodes")
+    st.caption(t("ep_filter_showing", n=len(filtered), total=total))
     _render_episode_table(filtered, prefix="all")
 
 
 # ---------------------------------------------------------------------------
-# Episode 详情模态（使用展开式）
+# Episode detail panel (expander style)
 # ---------------------------------------------------------------------------
 if "selected_episode" in st.session_state and st.session_state.selected_episode is not None:
     ep_id = st.session_state.selected_episode
@@ -815,33 +827,5 @@ if "selected_episode" in st.session_state and st.session_state.selected_episode 
 
 
 # ---------------------------------------------------------------------------
-# 辅助函数
+# Helpers
 # ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# 轨迹可视化 — 数据加载
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# 轨迹可视化 — 渲染
-# ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-

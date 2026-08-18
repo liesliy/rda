@@ -20,7 +20,26 @@ from rda.report.aggregation import aggregate_dataset_metrics
 # 四维健康指数计算
 # ---------------------------------------------------------------------------
 
-def compute_dhi(result: DatasetAuditResult) -> Dict[str, Any]:
+def _dhi_detail(key: str, lang: str, **kwargs) -> str:
+    """Localized readiness-detail strings for compute_dhi."""
+    table = {
+        "zh": {
+            "empty": "数据集中无 episode",
+            "ready": f"数据可直接用于训练，共 {kwargs.get('total', 0)} 个 episode",
+            "cond": f"审核 {kwargs.get('review', 0)} 个 episode 后可用于训练",
+            "not_ready": "存在显著质量问题，建议先处理数据",
+        },
+        "en": {
+            "empty": "No episodes in dataset",
+            "ready": f"Data is ready for training — {kwargs.get('total', 0)} episodes",
+            "cond": f"Usable for training after reviewing {kwargs.get('review', 0)} episodes",
+            "not_ready": "Significant quality issues found — clean the data first",
+        },
+    }
+    return table.get(lang, table["zh"]).get(key, key)
+
+
+def compute_dhi(result: DatasetAuditResult, lang: str = "zh") -> Dict[str, Any]:
     """计算 Dataset Health Index 与四维维度得分。
 
     权重：Integrity 0.4 / Temporal 0.2 / Motion 0.2 / Consistency 0.2
@@ -45,7 +64,7 @@ def compute_dhi(result: DatasetAuditResult) -> Dict[str, Any]:
             "dimensions": {"integrity": 0.0, "temporal": 0.0,
                            "motion": 0.0, "consistency": 0.0},
             "training_readiness": "Not Ready",
-            "training_readiness_detail": "数据集中无 episode",
+            "training_readiness_detail": _dhi_detail("empty", lang),
             "estimated_post_cleanup_quality": 0.0,
         }
 
@@ -162,13 +181,13 @@ def compute_dhi(result: DatasetAuditResult) -> Dict[str, Any]:
 
     if exclude_pct < 0.05 and review_pct < 0.15:
         readiness = "Ready"
-        readiness_detail = f"数据可直接用于训练，共 {total} 个 episode"
+        readiness_detail = _dhi_detail("ready", lang, total=total)
     elif exclude_pct < 0.10 and review_pct < 0.30:
         readiness = "Conditionally Ready"
-        readiness_detail = f"审核 {review_count} 个 episode 后可用于训练"
+        readiness_detail = _dhi_detail("cond", lang, review=review_count)
     else:
         readiness = "Not Ready"
-        readiness_detail = f"存在显著质量问题，建议先处理数据"
+        readiness_detail = _dhi_detail("not_ready", lang)
 
     # ---------- 预估清洗后质量 ----------
     if total > 0 and (total - exclude_count) > 0:
@@ -199,16 +218,20 @@ def compute_dhi(result: DatasetAuditResult) -> Dict[str, Any]:
 # 雷达图
 # ---------------------------------------------------------------------------
 
-def make_radar_chart(dimensions: Dict[str, float]) -> go.Figure:
+def make_radar_chart(dimensions: Dict[str, float], lang: str = "zh") -> go.Figure:
     """生成四维雷达图。"""
-    dims = [
-        ("数据完整性", dimensions.get("integrity", 0)),
-        ("时间质量", dimensions.get("temporal", 0)),
-        ("运动质量", dimensions.get("motion", 0)),
-        ("行为一致性", dimensions.get("consistency", 0)),
+    labels_local = {
+        "zh": ["数据完整性", "时间质量", "运动质量", "行为一致性"],
+        "en": ["Integrity", "Temporal", "Motion", "Consistency"],
+    }
+    score_label = "得分" if lang == "zh" else "Score"
+    labels = labels_local.get(lang, labels_local["zh"])
+    values = [
+        dimensions.get("integrity", 0),
+        dimensions.get("temporal", 0),
+        dimensions.get("motion", 0),
+        dimensions.get("consistency", 0),
     ]
-    labels = [d[0] for d in dims]
-    values = [d[1] for d in dims]
 
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
@@ -217,7 +240,7 @@ def make_radar_chart(dimensions: Dict[str, float]) -> go.Figure:
         fill="toself",
         fillcolor="rgba(99, 102, 241, 0.3)",
         line=dict(color="rgb(99, 102, 241)", width=2),
-        name="得分",
+        name=score_label,
     ))
     fig.update_layout(
         polar=dict(
@@ -236,7 +259,7 @@ def make_radar_chart(dimensions: Dict[str, float]) -> go.Figure:
 # 问题统计（Critical / Warning / Info）
 # ---------------------------------------------------------------------------
 
-def compute_issue_stats(result: DatasetAuditResult) -> Dict[str, Any]:
+def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[str, Any]:
     """统计问题分布。
 
     Returns:
@@ -274,21 +297,38 @@ def compute_issue_stats(result: DatasetAuditResult) -> Dict[str, Any]:
         elif ep_warning:
             warning_eps += 1
 
-    # 问题描述映射
+    # 问题描述映射（双语）
     issue_desc = {
-        "missing_dropout": "缺失帧 / 传感器断连",
-        "invalid_values": "NaN/Inf 异常值",
-        "schema_consistency": "数据格式不匹配",
-        "timestamp_validity": "时间戳异常（非单调/间隔不均）",
-        "joint_limit": "关节限位超限",
-        "sensor_synchronization": "多传感器同步偏差",
-        "sampling_jitter": "采样抖动",
-        "velocity_acceleration": "速度/加速度异常",
-        "action_discontinuity": "动作不连续（抖动）",
-        "idle_ratio": "有效运动比例过低",
-        "distribution": "轨迹分布离群",
-        "coverage": "状态空间覆盖不足",
+        "zh": {
+            "missing_dropout": "缺失帧 / 传感器断连",
+            "invalid_values": "NaN/Inf 异常值",
+            "schema_consistency": "数据格式不匹配",
+            "timestamp_validity": "时间戳异常（非单调/间隔不均）",
+            "joint_limit": "关节限位超限",
+            "sensor_synchronization": "多传感器同步偏差",
+            "sampling_jitter": "采样抖动",
+            "velocity_acceleration": "速度/加速度异常",
+            "action_discontinuity": "动作不连续（抖动）",
+            "idle_ratio": "有效运动比例过低",
+            "distribution": "轨迹分布离群",
+            "coverage": "状态空间覆盖不足",
+        },
+        "en": {
+            "missing_dropout": "Missing frames / sensor dropout",
+            "invalid_values": "NaN/Inf invalid values",
+            "schema_consistency": "Schema mismatch",
+            "timestamp_validity": "Timestamp anomalies (non-monotonic / uneven)",
+            "joint_limit": "Joint limit violation",
+            "sensor_synchronization": "Multi-sensor sync deviation",
+            "sampling_jitter": "Sampling jitter",
+            "velocity_acceleration": "Velocity/acceleration anomalies",
+            "action_discontinuity": "Action discontinuity (jitter)",
+            "idle_ratio": "Low effective-motion ratio",
+            "distribution": "Trajectory distribution outlier",
+            "coverage": "Insufficient state-space coverage",
+        },
     }
+    desc_table = issue_desc.get(lang, issue_desc["zh"])
 
     # 映射到 Pattern Type
     metric_to_pattern = {
@@ -315,7 +355,7 @@ def compute_issue_stats(result: DatasetAuditResult) -> Dict[str, Any]:
             "metric_name": code,
             "count": count,
             "severity": severity,
-            "description": issue_desc.get(code, code),
+            "description": desc_table.get(code, code),
             "pattern_type": metric_to_pattern.get(code),
         })
 
@@ -331,7 +371,7 @@ def compute_issue_stats(result: DatasetAuditResult) -> Dict[str, Any]:
 # Episode 列表 DataFrame
 # ---------------------------------------------------------------------------
 
-def build_episodes_dataframe(result: DatasetAuditResult) -> pd.DataFrame:
+def build_episodes_dataframe(result: DatasetAuditResult, lang: str = "zh") -> pd.DataFrame:
     """构建 Episode 列表 DataFrame，用于 Episode Explorer。"""
     rows: List[Dict[str, Any]] = []
 
@@ -373,7 +413,9 @@ def build_episodes_dataframe(result: DatasetAuditResult) -> pd.DataFrame:
                 continue
             if not m.passed:
                 top_issues.append(m_name.upper().replace("_", "-"))
-        top_issues_str = ", ".join(top_issues[:3]) if top_issues else "无"
+        top_issues_str = ", ".join(top_issues[:3]) if top_issues else (
+            "无" if lang != "en" else "None"
+        )
 
         rows.append({
             "episode_id": ep_idx,

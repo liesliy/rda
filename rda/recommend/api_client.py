@@ -55,12 +55,13 @@ def get_api_url() -> str:
 def _cache_key(
     temporal_sufficiency: DatasetTemporalSufficiency,
     policy: str,
+    lang: str = "zh",
 ) -> str:
-    """Generate a stable cache key from metrics + policy."""
+    """Generate a stable cache key from metrics + policy + language."""
     ts_dict = temporal_sufficiency.to_dict()
     # Sort keys for stable hash
     payload = json.dumps(
-        {"policy": policy, "ts": ts_dict},
+        {"policy": policy, "lang": lang, "ts": ts_dict},
         sort_keys=True,
         default=str,
     )
@@ -158,6 +159,7 @@ def _call_api(
     temporal_sufficiency: DatasetTemporalSufficiency,
     episode_count: int,
     total_frames: int,
+    lang: str = "zh",
 ) -> Dict[str, Any]:
     """Call the remote recommendation API.
 
@@ -186,6 +188,7 @@ def _call_api(
             "temporal_sufficiency": ts_dict,
             "episode_count": episode_count,
             "total_frames": total_frames,
+            "lang": lang,
         },
         timeout=REQUEST_TIMEOUT,
         headers={"User-Agent": f"rda-cli/0.5.0"},
@@ -238,6 +241,7 @@ def run_recommendation(
     total_episodes: int,
     total_frames: int,
     progress_callback=None,
+    lang: str = "zh",
 ) -> RecommendationResult:
     """Run the full recommendation pipeline.
 
@@ -257,11 +261,14 @@ def run_recommendation(
         total_episodes: Total number of episodes.
         total_frames: Total number of frames.
         progress_callback: Optional callback(step, total, message).
+        lang: Language of the returned copy ("zh" or "en"). Cached
+            per-language so switching languages does not mix copy.
 
     Returns:
         RecommendationResult with recommendations and rules_version.
     """
     policy_name = "frame-wise" if target_policy == TargetPolicy.FRAME_WISE else "temporal"
+    lang = lang if lang in ("zh", "en") else "zh"
 
     # Step 1: Compute metrics locally
     if progress_callback:
@@ -275,7 +282,7 @@ def run_recommendation(
     )
 
     # Step 2: Check cache
-    key = _cache_key(agg, policy_name)
+    key = _cache_key(agg, policy_name, lang)
     cached = _read_cache(key)
 
     # Step 3: Try API
@@ -288,6 +295,7 @@ def run_recommendation(
             temporal_sufficiency=agg,
             episode_count=total_episodes,
             total_frames=total_frames,
+            lang=lang,
         )
     except ImportError as e:
         api_error = str(e)

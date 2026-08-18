@@ -402,6 +402,13 @@ def example() -> None:
     help="Path to save the recommendation JSON report.",
 )
 @click.option(
+    "--lang",
+    type=click.Choice(["zh", "en"], case_sensitive=False),
+    default="zh",
+    show_default=True,
+    help="Language of the recommendation text (zh / en).",
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -413,6 +420,7 @@ def recommend(
     policy: str,
     output_format: str,
     output: Optional[Path],
+    lang: str,
     verbose: bool,
 ) -> None:
     """Generate data optimization recommendations for the dataset at PATH.
@@ -442,7 +450,7 @@ def recommend(
     Examples:
       rda recommend /path/to/dataset --policy frame-wise
       rda recommend /path/to/dataset --policy temporal
-      rda recommend /path/to/dataset --format json -o rec.json
+      rda recommend /path/to/dataset --lang en --format json -o rec.json
 
     \b
     Environment:
@@ -455,10 +463,12 @@ def recommend(
 
     path_str = str(path)
     target_policy = TargetPolicy.from_cli_name(policy)
+    lang = lang.lower()
 
     if verbose:
         click.echo(f"Loading dataset from: {path_str}")
         click.echo(f"Target policy: {target_policy.value}")
+        click.echo(f"Language: {lang}")
 
     # --- Load dataset ---
     try:
@@ -491,6 +501,7 @@ def recommend(
                     f"  Analyzing {step}/{total}: {msg}"
                 ) if verbose else None
             ),
+            lang=lang,
         )
     except Exception as e:
         click.echo(f"Error: Recommendation failed: {e}", err=True)
@@ -506,7 +517,7 @@ def recommend(
         else:
             click.echo(json.dumps(report, indent=2, default=str))
     else:
-        text = format_recommendation_text(result)
+        text = format_recommendation_text(result, lang=lang)
         click.echo(text)
         if output:
             output.write_text(text)

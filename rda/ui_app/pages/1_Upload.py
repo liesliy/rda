@@ -1,6 +1,7 @@
-"""Page 1: Upload · 上传数据集。
+"""Page 1: Upload · load a dataset.
 
-支持 LeRobot 格式数据集上传，预览基本信息（episode 数、frame 数、DOF、FPS）。
+Supports LeRobot-format datasets (local path or folder upload) and shows
+a basic preview (episodes, frames, DOF, FPS).
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from rda.ui_app.i18n import t
+
 # ---------------------------------------------------------------------------
 # 辅助函数（必须在页面逻辑之前定义）
 # ---------------------------------------------------------------------------
@@ -22,7 +25,7 @@ def _load_dataset(path_str: str) -> None:
     """从本地路径加载数据集。"""
     from rda.io.lerobot_loader import load_lerobot_dataset
 
-    with st.spinner("正在加载数据集..."):
+    with st.spinner(t("upload_loading")):
         try:
             dataset_info = load_lerobot_dataset(path_str)
             st.session_state.dataset_info = dataset_info
@@ -31,9 +34,9 @@ def _load_dataset(path_str: str) -> None:
             st.session_state.audit_result = None
             st.session_state.dataset_report = None
             st.session_state.episodes_df = None
-            st.success(f"成功加载 {dataset_info.num_episodes} 个 episodes")
+            st.success(t("upload_loaded_ok", n=dataset_info.num_episodes))
         except Exception as e:
-            st.error(f"加载失败：{e}")
+            st.error(t("upload_load_err", err=e))
 
 
 def _handle_uploaded_files(files) -> None:
@@ -70,32 +73,32 @@ def _estimate_fps(info) -> float | None:
     return None
 
 
-st.title("📤 上传数据集")
-st.caption("支持 LeRobot 格式数据集，上传后可进行质量审计")
+st.title(t("upload_title"))
+st.caption(t("upload_caption"))
 
 # ---------------------------------------------------------------------------
 # 平台选择
 # ---------------------------------------------------------------------------
-st.subheader("数据集来源")
+st.subheader(t("upload_source"))
 
 platform = st.selectbox(
-    "选择平台",
+    t("upload_platform"),
     options=["armnetbench", "droid", "custom"],
     index=2 if st.session_state.get("platform") == "custom"
     else (0 if st.session_state.get("platform") == "armnetbench" else 1),
-    help="armnetbench / droid 为预置平台，custom 为自定义 LeRobot 格式数据集",
+    help=t("upload_platform_help"),
 )
 st.session_state.platform = platform
 
 # ---------------------------------------------------------------------------
 # 数据集加载方式
 # ---------------------------------------------------------------------------
-col1, col2 = st.tabs(["📁 本地路径", "📤 上传文件夹"])
+col1, col2 = st.tabs([t("upload_tab_local"), t("upload_tab_files")])
 
 with col1:
-    st.markdown("输入本地 LeRobot 数据集目录路径")
+    st.markdown(t("upload_local_hint"))
     local_path = st.text_input(
-        "数据集路径",
+        t("upload_path_label"),
         value=st.session_state.get("dataset_path") or "",
         placeholder="/path/to/lerobot/dataset",
         label_visibility="collapsed",
@@ -103,21 +106,21 @@ with col1:
 
     col_btn1, col_btn2 = st.columns([1, 3])
     with col_btn1:
-        if st.button("加载数据集", type="primary", key="load_local"):
+        if st.button(t("upload_load_btn"), type="primary", key="load_local"):
             if not local_path:
-                st.error("请输入数据集路径")
+                st.error(t("upload_path_empty_err"))
             else:
                 _load_dataset(local_path)
 
 with col2:
-    st.markdown("上传数据集目录（多个文件）")
+    st.markdown(t("upload_files_hint"))
     uploaded_files = st.file_uploader(
-        "选择数据集文件（支持 parquet / json / 等 LeRobot 格式文件）",
+        t("upload_uploader_label"),
         accept_multiple_files=True,
-        help="请选择数据集中的所有文件，将保存到临时目录",
+        help=t("upload_uploader_help"),
     )
 
-    if uploaded_files and st.button("保存并加载", type="primary", key="load_uploaded"):
+    if uploaded_files and st.button(t("upload_save_load_btn"), type="primary", key="load_uploaded"):
         _handle_uploaded_files(uploaded_files)
 
 
@@ -126,48 +129,44 @@ with col2:
 # ---------------------------------------------------------------------------
 if st.session_state.dataset_info is not None:
     st.divider()
-    st.subheader("✅ 数据集信息")
+    st.subheader(t("upload_info_header"))
 
     info = st.session_state.dataset_info
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Episode 数量", info.num_episodes)
+        st.metric(t("upload_metric_eps"), info.num_episodes)
     with col2:
-        st.metric("总帧数", f"{info.total_frames:,}")
+        st.metric(t("upload_metric_frames"), f"{info.total_frames:,}")
     with col3:
         # 估算 DOF（action 的维度数）
         dof = _estimate_dof(info)
-        st.metric("动作维度 (DOF)", dof if dof else "—")
+        st.metric(t("upload_metric_dof"), dof if dof else "—")
     with col4:
         # 估算 FPS（仅在元数据明确提供时显示，否则 Unknown）
         fps = _estimate_fps(info)
-        st.metric("帧率 (FPS)", f"{fps:.1f}" if fps else "Unknown")
+        st.metric(t("upload_metric_fps"), f"{fps:.1f}" if fps else "Unknown")
 
     # 模态与动作
     if info.modalities:
-        with st.expander(f"📷 观测模态 ({len(info.modalities)})"):
+        with st.expander(t("upload_modalities", n=len(info.modalities))):
             st.write(", ".join(info.modalities))
 
     if info.action_keys:
-        with st.expander(f"🦾 动作空间 ({len(info.action_keys)})"):
+        with st.expander(t("upload_actions", n=len(info.action_keys))):
             st.write(", ".join(info.action_keys))
 
     if info.meta:
-        with st.expander("📝 元信息"):
+        with st.expander(t("upload_meta")):
             st.json(info.meta)
 
     st.success(
-        f"数据集加载成功！共 {info.num_episodes} 个 episodes，"
-        f"{info.total_frames:,} 帧。",
+        t("upload_success", eps=info.num_episodes, frames=f"{info.total_frames:,}"),
         icon="🎉",
     )
 
     st.page_link(
         "pages/2_Audit.py",
-        label="下一步：运行审计 →",
+        label=t("upload_next_audit"),
         icon="🔍",
     )
-
-
-
