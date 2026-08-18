@@ -122,10 +122,12 @@ health_page = st.Page("pages/3_Health_Overview.py", title="Health Overview · �
 episode_page = st.Page("pages/4_Episode_Explorer.py", title="Episode Explorer · 逐集查看", icon="📋")
 export_page = st.Page("pages/5_Export.py", title="Export · 导出报告", icon="📥")
 history_page = st.Page("pages/6_History.py", title="Audit History · 审计历史", icon="📈")
+recommend_page = st.Page("pages/7_Recommend.py", title="Recommend · 优化建议", icon="🧭")
 
 pg = st.navigation({
     "数据流程": [upload_page, audit_page],
     "审计结果": [health_page, episode_page, export_page],
+    "优化建议": [recommend_page],
     "趋势分析": [history_page],
 })
 

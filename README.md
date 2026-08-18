@@ -37,6 +37,12 @@ With LeRobot dependency (for `.parquet` dataset loading):
 pip install robot-data-audit[lerobot]
 ```
 
+With the Streamlit web UI:
+
+```bash
+pip install robot-data-audit[ui]
+```
+
 ## Quick Start
 
 ### 1. Audit a dataset
@@ -71,6 +77,17 @@ only aggregated statistics (<1KB, no raw episode data) to the RDA rules API
 (`https://rda.niusu2026.cn`) for evaluation. Results are cached locally for offline
 reuse. `rda audit` remains fully offline. For private/air-gapped deployments, point
 `RDA_API_URL` at your own server.
+
+### 3. Launch the web UI
+
+```bash
+pip install robot-data-audit[ui]
+rda ui
+```
+
+Opens a Streamlit dashboard at `http://localhost:8501` — upload a dataset, run the
+audit with live progress, explore per-episode results, generate recommendations
+(via the same privacy-preserving API path), and export reports.
 
 
 ### 3. JSON output & piping

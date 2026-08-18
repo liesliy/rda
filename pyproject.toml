@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot-data-audit"
-version = "0.5.0"
+version = "0.5.1"
 description = "Robot Data Audit (RDA) - Quality auditing tool for robot datasets"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -30,8 +30,8 @@ dependencies = [
 [project.optional-dependencies]
 lerobot = ["lerobot>=0.6"]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.1"]
-ui = ["streamlit>=1.30.0", "plotly>=5.18.0", "pandas>=2.0"]
-all = ["lerobot>=0.6", "streamlit>=1.30.0", "plotly>=5.18.0", "pandas>=2.0"]
+ui = ["streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
+all = ["lerobot>=0.6", "streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
 
 [project.scripts]
 rda = "rda.cli.main:cli"

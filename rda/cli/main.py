@@ -83,7 +83,7 @@ def cli(ctx: click.Context) -> None:
     default=False,
     help=(
         "Launch the Streamlit web UI after the audit completes. "
-        "(Not yet available — coming in a future release)"
+        "Requires the optional UI extras: pip install robot-data-audit[ui]"
     ),
 )
 @click.option(
@@ -218,15 +218,100 @@ def audit(
 
     # --- UI flag ------------------------------------------------------------
     if launch_ui:
-        click.echo("")
-        click.echo(
-            "Streamlit UI is not yet available. "
-            "Stay tuned for the web-based dashboard in a future release."
-        )
+        _launch_streamlit_ui()
 
     # --- Exit with non-zero if any EXCLUDE verdicts -------------------------
     if summary.verdict_counts.get("EXCLUDE", 0) > 0:
         sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# ui subcommand
+# ---------------------------------------------------------------------------
+
+def _launch_streamlit_ui(
+    port: int = 8501,
+    headless: bool = False,
+) -> None:
+    """Launch the bundled Streamlit web UI in a subprocess."""
+    import subprocess
+    import rda.ui_app as _ui_pkg  # noqa: F401  (existence check)
+
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        click.echo(
+            "Error: Streamlit is required for the web UI but not installed.",
+            err=True,
+        )
+        click.echo(
+            "  Install it with: pip install robot-data-audit[ui]",
+            err=True,
+        )
+        sys.exit(1)
+
+    app_path = Path(_ui_pkg.__file__).resolve().parent / "app.py"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--global.developmentMode",
+        "false",
+        "--browser.gatherUsageStats",
+        "false",
+    ]
+    if headless:
+        cmd.extend(["--server.headless", "true"])
+
+    click.echo(f"Launching RDA web UI at http://localhost:{port} ...")
+    click.echo("  (Press Ctrl+C to stop)")
+    try:
+        proc = subprocess.run(cmd)
+        sys.exit(proc.returncode)
+    except KeyboardInterrupt:
+        click.echo("\nUI stopped.")
+
+
+@cli.command(
+    "ui",
+    short_help="Launch the Streamlit web UI.",
+)
+@click.option(
+    "-p",
+    "--port",
+    type=int,
+    default=8501,
+    show_default=True,
+    help="Port for the Streamlit server.",
+)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    help="Run Streamlit in headless mode (don't auto-open a browser).",
+)
+def ui(port: int, headless: bool) -> None:
+    """Launch the RDA Streamlit web UI.
+
+    The web UI supports uploading a LeRobot dataset, running the full
+    audit with progress feedback, exploring per-episode results,
+    generating optimization recommendations, and exporting reports.
+
+    \b
+    Requires the optional UI extras:
+      pip install robot-data-audit[ui]
+
+    \b
+    Examples:
+      rda ui
+      rda ui --port 8502 --headless
+    """
+    _launch_streamlit_ui(port=port, headless=headless)
 
 
 # ---------------------------------------------------------------------------
