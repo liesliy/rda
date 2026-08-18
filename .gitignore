@@ -1,0 +1,30 @@
+# Closed-source components (never commit)
+server/
+server/**
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+venv/
+.venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# RDA runtime
+.rda/
+rda_report.json
+
+# OS
+.DS_Store
+Thumbs.db
