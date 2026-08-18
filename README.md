@@ -64,6 +64,9 @@ rda recommend /path/to/dataset --policy temporal
 
 # JSON output for scripting
 rda recommend /path/to/dataset --policy frame-wise --format json
+
+# English output (default is Chinese)
+rda recommend /path/to/dataset --policy temporal --lang en
 ```
 
 **What `recommend` tells you:**
@@ -89,8 +92,12 @@ Opens a Streamlit dashboard at `http://localhost:8501` — upload a dataset, run
 audit with live progress, explore per-episode results, generate recommendations
 (via the same privacy-preserving API path), and export reports.
 
+**Bilingual UI (since v0.5.2):** the entire dashboard — including backend
+recommendation copy and exported reports — switches cleanly between
+**English** and **中文** via the language selector in the sidebar. No mixed text.
 
-### 3. JSON output & piping
+
+### 4. JSON output & piping
 
 ```bash
 # JSON to stdout
@@ -103,7 +110,7 @@ rda audit /path/to/dataset -o /tmp/my_report.json
 rda audit /path/to/dataset --platform so101 -v
 ```
 
-### 4. Python API
+### 5. Python API
 
 ```python
 from rda.audit.dataset_audit import DatasetAuditor
@@ -141,6 +148,7 @@ rda recommend [OPTIONS] PATH
 | `--policy [frame-wise\|temporal]` | Target model architecture type (required) |
 | `-o, --output FILE` | Save JSON recommendation report |
 | `--format [json\|text]` | Output format (default: `text`) |
+| `--lang [zh\|en]` | Language of the recommendation text (default: `zh`) |
 | `-v, --verbose` | Verbose output |
 
 ### `rda example`
