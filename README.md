@@ -11,7 +11,10 @@
 
 RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal consistency, motion quality, and distribution coverage. It then generates optimization recommendations calibrated to your target model architecture.
 
-![Demo](https://raw.githubusercontent.com/liesliy/rda/main/assets/demo.svg)
+<img width="2549" height="1403" alt="rda-firstpage" src="https://github.com/user-attachments/assets/35173b6a-275c-466c-985f-9674f7a59a1d" />
+
+![Uploading RDA_RECOMMAND.png…]()
+
 
 ## Features
 
