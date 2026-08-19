@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest tests/ -v
+
+      - name: Verify closed-source layer stays out of the wheel
+        run: |
+          pip install build
+          python -m build --wheel
+          python - <<'EOF'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          leaked = [n for n in names if n.startswith("server/") or "engine_core" in n]
+          assert not leaked, f"closed-source code leaked into wheel: {leaked}"
+          print(f"wheel clean: {len(names)} files, no server/ or engine_core")
+          EOF

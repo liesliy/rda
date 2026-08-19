@@ -4,6 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/robot-data-audit)](https://pypi.org/project/robot-data-audit/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://static.pepy.tech/badge/robot-data-audit)](https://pepy.tech/project/robot-data-audit)
+[![Tests](https://github.com/liesliy/rda/actions/workflows/ci.yml/badge.svg)](https://github.com/liesliy/rda/actions/workflows/ci.yml)
 
 > **Quality auditing + optimization recommendations for robot datasets.**
 > Diagnose data quality issues. Get actionable, confidence-graded suggestions.
@@ -14,8 +15,6 @@ RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal 
 <img width="2549" height="1403" alt="rda-firstpage" src="https://github.com/user-attachments/assets/35173b6a-275c-466c-985f-9674f7a59a1d" />
 
 <img width="2549" height="1403" alt="RDA_RECOMMAND" src="https://github.com/user-attachments/assets/e366cdf1-b169-46b0-b020-5327493a9124" />
-
-
 
 ## Features
 
@@ -28,6 +27,16 @@ RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal 
 - **Three-tier verdicts**: PASS / REVIEW / EXCLUDE
 - **CLI-first design**: JSON + text output, pipe-friendly
 - **Temporal sufficiency analysis**: idle detection, active run distribution, valid window ratios
+
+## Tested on public data
+
+RDA has been run over **11 public LeRobot-format datasets — 4,909 episodes** — with the same default thresholds everywhere, zero per-dataset tuning. A few things it found:
+
+- One xArm dataset is genuinely clean (767/800 episodes PASS, 20.8% median idle); another from the *same robot platform* runs 83.3% idle — task difficulty, not collection sloppiness
+- A community SO-100 dataset has action spikes in **100% of episodes** and 86.7% median idle
+- One popular dataset ships 1,690 episodes that read 0 frames — RDA flags them EXCLUDE instead of silently passing
+
+Full table, per-dataset numbers, and the five recurring patterns: **[docs/benchmark.md](docs/benchmark.md)**
 
 ## Installation
 
@@ -221,6 +230,24 @@ cd robot-data-audit
 pip install -e ".[dev]"
 pytest
 ```
+
+### Testing the gate itself
+
+The suite in `tests/` exists for a reason worth explaining. During the
+0.4.x era, a bug let anomalous episodes walk away with a PASS badge: the
+behavior layer correctly computed action spikes and idle ratios, but the
+verdict aggregator ignored those signals entirely. The gate wasn't
+consuming its own evidence.
+
+`tests/test_negative_control.py` pins that exact failure mode: metric
+results that pass every rule but contain known anomalies (150 spikes, a
+frozen arm) **must** come back REVIEW — and hard corruption must stay
+EXCLUDE (the gate can't fail open in either direction). The rest of the
+suite covers the i18n catalog (zh/en key alignment) and boundary
+behavior of the two core behavioral metrics.
+
+CI runs the tests on every push and additionally verifies that the
+closed-source recommendation layer never leaks into the published wheel.
 
 ## Citation
 
