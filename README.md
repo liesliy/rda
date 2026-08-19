@@ -38,6 +38,10 @@ RDA has been run over **11 public LeRobot-format datasets â€” 4,909 episodes** â
 
 Full table, per-dataset numbers, and the five recurring patterns: **[docs/benchmark.md](docs/benchmark.md)**
 
+Methodology and other experiment write-ups (i18n smoke test, server deploy
+verify, the spike/verdict bug regression pin, wheel leak guard):
+**[experiments/](experiments/)**
+
 ## Installation
 
 ```bash
