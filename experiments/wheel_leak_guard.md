@@ -45,16 +45,16 @@ that matches), the CI goes red. The assertion also catches the subtler
 case: a stray `import` that pulls `engine_core` into the wheel as a
 dependency artifact.
 
-## Verification (v0.5.2 wheel)
+## Verification (v0.5.3 wheel)
 
-Build: `python -m build` → `dist/robot_data_audit-0.5.2-py3-none-any.whl`
+Build: `python -m build` → `dist/robot_data_audit-0.5.3-py3-none-any.whl`
 
 | Check | Result |
 |---|---|
-| Total files in wheel | 35 |
+| Total files in wheel | 53 |
 | `server/` paths in wheel | 0 |
 | `engine_core` in any path | 0 |
-| `rda/` module files | 35 |
+| `rda/` module files | 47 |
 
 ```bash
 # reproduce locally

@@ -807,3 +807,73 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
         "pattern_distribution": pattern_dist,
         "estimated_post_cleanup_quality": post_cleanup_dhi,
     }
+
+
+# ---------------------------------------------------------------------------
+# Blind / anonymized report — for external sharing
+# ---------------------------------------------------------------------------
+
+def anonymize_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip all identifying information from a JSON report for blind sharing.
+
+    Replaces filesystem paths with a stable SHA-256 hash (first 16 chars),
+    redacts the robot name, and marks the report as ``blind_audit``.
+
+    The hash allows the receiver to deduplicate reports from the same
+    dataset without knowing the original path.
+
+    What gets redacted:
+        - ``dataset.path`` → ``"redacted:<hash>"``
+        - ``dataset_id`` → ``"redacted:<hash>"``
+        - ``profile.robot`` → ``"redacted"``
+
+    What is **not** redacted (share-safe by design):
+        - All metric values (idle ratio, spike count, etc.) — just numbers
+        - Verdicts (PASS / REVIEW / EXCLUDE)
+        - Episode counts, frame counts
+        - Tool version
+
+    No raw trajectory data, images, or action arrays are present in the
+    report to begin with — RDA's audit only stores aggregated metrics.
+
+    Args:
+        report: A report dict from :func:`generate_json_report` or
+            :func:`generate_dataset_report`.
+
+    Returns:
+        A new dict with identifying info removed.
+    """
+    import copy
+    import hashlib
+
+    anon = copy.deepcopy(report)
+
+    # --- Determine original path for hashing ---
+    original_path = ""
+    if isinstance(anon.get("dataset"), dict):
+        original_path = anon["dataset"].get("path", "")
+    elif anon.get("dataset_id"):
+        original_path = str(anon["dataset_id"])
+
+    path_hash = (
+        hashlib.sha256(str(original_path).encode()).hexdigest()[:16]
+        if original_path
+        else "unknown"
+    )
+
+    # --- Redact engine-format fields ---
+    if isinstance(anon.get("dataset"), dict):
+        anon["dataset"]["path"] = f"redacted:{path_hash}"
+
+    # --- Redact MVP-spec-format fields ---
+    if "dataset_id" in anon:
+        anon["dataset_id"] = f"redacted:{path_hash}"
+
+    if isinstance(anon.get("profile"), dict):
+        anon["profile"]["robot"] = "redacted"
+
+    # --- Mark as blind ---
+    anon["blind_audit"] = True
+    anon["report_hash"] = path_hash
+
+    return anon

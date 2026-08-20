@@ -93,6 +93,18 @@ def cli(ctx: click.Context) -> None:
     default=False,
     help="Enable verbose output.",
 )
+@click.option(
+    "--blind",
+    "blind",
+    is_flag=True,
+    default=False,
+    help=(
+        "Anonymize the output report for blind sharing. "
+        "Replaces filesystem paths with hashes so the report can be "
+        "shared externally without revealing your data location. "
+        "No raw trajectory data is included — only aggregated metrics."
+    ),
+)
 def audit(
     path: Path,
     output: Optional[Path],
@@ -100,6 +112,7 @@ def audit(
     platform: Optional[str],
     launch_ui: bool,
     verbose: bool,
+    blind: bool,
 ) -> None:
     """Audit a LeRobot dataset at the given PATH.
 
@@ -111,6 +124,7 @@ def audit(
       rda audit /path/to/lerobot/dataset
       rda audit ./my_dataset --format json --output report.json
       rda audit ./my_dataset --platform so101 -v
+      rda audit ./my_dataset --blind  # anonymized report for external sharing
     """
     from rda.audit.dataset_audit import DatasetAuditor
     from rda.report.json_report import save_json_report
@@ -195,24 +209,47 @@ def audit(
     # --- Build and display summary -----------------------------------------
     summary = build_summary(result)
 
+    # Generate the JSON report dict once (used for both stdout and file)
+    import json as _json
+    from rda.report.json_report import generate_json_report, anonymize_report
+
+    report_dict = generate_json_report(result)
+    if blind:
+        report_dict = anonymize_report(report_dict)
+
     if output_format.lower() == "text":
-        click.echo(format_enhanced_summary_text(result))
+        text = format_enhanced_summary_text(result)
+        if blind:
+            # Redact the dataset path in text output
+            text = text.replace(
+                f"Dataset: {path_str}", "Dataset: [redacted]"
+            )
+        click.echo(text)
     else:
-        # JSON summary on stdout
-        import json
-        from rda.report.json_report import generate_json_report
         click.echo(
-            json.dumps(generate_json_report(result), indent=2, default=str)
+            _json.dumps(report_dict, indent=2, default=str)
         )
 
     # --- Save JSON report ---------------------------------------------------
     if output is None:
-        output = path / "rda_report.json"
+        if blind:
+            output = Path.cwd() / "rda_blind_report.json"
+        else:
+            output = path / "rda_report.json"
 
     try:
-        save_json_report(result, output)
-        if verbose:
+        # Save the (possibly anonymized) report dict directly
+        Path(output).write_text(
+            _json.dumps(report_dict, indent=2, default=str),
+            encoding="utf-8",
+        )
+        if verbose or blind:
             click.echo(f"\nReport saved to: {output}")
+            if blind:
+                click.echo(
+                    "  [Blind mode] Path and identifying info redacted. "
+                    "This file is safe to share externally."
+                )
     except OSError as e:
         click.echo(f"Warning: Could not save report: {e}", err=True)
 

@@ -1,3 +1,3 @@
 """Robot Data Audit (RDA) - Quality auditing tool for robot datasets."""
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"

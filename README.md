@@ -30,11 +30,11 @@ RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal 
 
 ## Tested on public data
 
-RDA has been run over **11 public LeRobot-format datasets — 4,909 episodes** — with the same default thresholds everywhere, zero per-dataset tuning. A few things it found:
+RDA has been run over **12 local LeRobot-format datasets — 4,959 episodes** — with the same default thresholds everywhere, zero per-dataset tuning. A few things it found:
 
 - One xArm dataset is genuinely clean (767/800 episodes PASS, 20.8% median idle); another from the *same robot platform* runs 83.3% idle — task difficulty, not collection sloppiness
 - A community SO-100 dataset has action spikes in **100% of episodes** and 86.7% median idle
-- One popular dataset ships 1,690 episodes that read 0 frames — RDA flags them EXCLUDE instead of silently passing
+- A local LIBERO copy had 773 episodes missing from the downloaded data files. RDA 0.5.3 fixes a LeRobot v3.0 metadata/data-file mapping issue so missing local files are distinguished from episodes that are actually present
 
 Full table, per-dataset numbers, and the five recurring patterns: **[docs/benchmark.md](docs/benchmark.md)**
 
@@ -120,6 +120,9 @@ recommendation copy and exported reports — switches cleanly between
 # JSON to stdout
 rda audit /path/to/dataset --format json
 
+# Blind report for external sharing (paths are hashed)
+rda audit /path/to/dataset --blind --format json
+
 # Save report to custom path
 rda audit /path/to/dataset -o /tmp/my_report.json
 
@@ -153,6 +156,7 @@ rda audit [OPTIONS] PATH
 | `--format [json\|text]` | Output format (default: `text`) |
 | `--platform TEXT` | Robot platform (e.g. `so101`, `droid`) for Tier 3 metrics |
 | `-v, --verbose` | Verbose output |
+| `--blind` | Redact identifying paths for externally shareable reports |
 
 ### `rda recommend`
 

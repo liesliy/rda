@@ -1,37 +1,40 @@
-# Benchmark: RDA on 11 Public Robot Datasets
+# Benchmark: RDA on 12 Local Robot Datasets
 
-**RDA version**: 0.5.2 · **Scope**: 4,909 episodes · **Last run**: 2026-08
+**RDA version**: 0.5.3 · **Scope**: 4,959 episodes · **Last run**: 2026-08-20
 
-We ran `rda audit` across 11 public LeRobot-format datasets — sim and real,
-scripted and human teleop, research arms and $100 hobby hardware — with zero
-tuning per dataset. The same default thresholds, everywhere. This page is the
-evidence behind the numbers; every figure below comes from a saved
-`rda_report.json`.
+We ran `rda audit` across 12 local LeRobot-format datasets — sim and real,
+scripted and human teleop, research arms and hobby hardware — with zero tuning
+per dataset. The same default thresholds, everywhere. This page is the
+reproducibility record; every figure below comes from saved RDA JSON reports.
+The corrected rerun includes the LeRobot v3.0 loader fix released in 0.5.3.
 
 ## Full results
 
-| Dataset | Type | Episodes | Verdicts (P/R/E) | Action spikes | Idle median | Idle p5 |
-|---|---|---|---|---|---|---|
-| aloha_sim_insertion_human | sim, human | 50 | 5 / 45 / 0 | 1,338 (100% eps) | 70.7% | 65.1% |
-| aloha_sim_transfer_cube_scripted | sim, scripted | 50 | 5 / 45 / 0 | 2,489 (100% eps) | 64.0% | 44.2% |
-| aloha_sim_insertion_scripted | sim, scripted | 50 | 1 / 49 / 0 | 1,633 (100% eps) | 63.7% | 53.7% |
-| droid_100 | real Franka | 100 | 34 / 66 / 0 | 1,428 (99% eps) | 70.7% | 55.7% |
-| pusht | sim | 206 | 43 / 163 / 0 | 1,148 (97% eps) | 81.7% | 59.5% |
-| HuggingFaceVLA/libero | sim | 1,693 | 0 / 3 / 1,690 | 34 (3 eps) | 76.5% (3 eps) | 74.6% |
-| bridge_orig_lerobot (sampled) | real WidowX | 25 | 4 / 21 / 0 | 91 (84% eps) | **93.3%** | 20.5% |
-| xarm_lift_medium | real xArm | 800 | **767** / 33 / 0 | 6 (1% eps) | **20.8%** | 12.5% |
-| xarm_push_medium | real xArm | 800 | 238 / 562 / 0 | 845 (62% eps) | 83.3% | 16.7% |
-| svla_so101_pickplace | real SO-100 | 50 | 5 / 45 / 0 | 260 (100% eps) | 86.7% | 59.5% |
-| jaco_play | real Jaco | 1,085 | 390 / 695 / 0 | 11,958 (77% eps) | 74.1% | 52.7% |
+| Dataset | Type | Episodes | Verdicts (P/R/E) | Action spikes | Idle median |
+|---|---|---:|---|---:|---:|
+| aloha_corrupted | synthetic corruption fixture | 50 | 6 / 42 / 2 | 1,273 (48 eps) | 70.7% |
+| aloha_insertion | sim / teleop | 50 | 5 / 45 / 0 | 1,338 (50 eps) | 70.7% |
+| aloha_insertion_scripted | sim / scripted | 50 | 1 / 49 / 0 | 1,633 (50 eps) | 63.7% |
+| aloha_transfer_scripted | sim / scripted | 50 | 5 / 45 / 0 | 2,489 (50 eps) | 64.0% |
+| bridge_sample | real WidowX / sampled | 25 | 4 / 21 / 0 | 91 (21 eps) | **93.3%** |
+| droid_100 | real Franka | 100 | 34 / 66 / 0 | 1,428 (99 eps) | 70.7% |
+| jaco_play | real Jaco | 1,085 | 390 / 695 / 0 | 11,958 (837 eps) | 74.1% |
+| libero (local copy) | sim / incomplete local copy | 1,693 | 213 / 707 / 773 | 6,276 (918 eps) | 73.7% (920 eps) |
+| pusht | sim | 206 | 43 / 163 / 0 | 1,148 (199 eps) | 81.7% |
+| svla_so101_pickplace | real SO-100 | 50 | 5 / 45 / 0 | 260 (50 eps) | 86.7% |
+| xarm_lift_medium | real xArm | 800 | **767** / 33 / 0 | 6 (5 eps) | **20.8%** |
+| xarm_push_medium | real xArm | 800 | 238 / 562 / 0 | 845 (500 eps) | 83.3% |
 
 Notes:
 
 - All integrity layers (NaN/Inf, timestamp validity, missing frames, schema)
-  came back clean on all 11 datasets.
-- **libero**: 1,690 of 1,693 episodes read 0 frames — a dataset-side
-  meta/layout mismatch. RDA flags those EXCLUDE instead of silently passing,
-  which is exactly the failure mode you want a gate to catch.
-- **bridge**: sampled 25 episodes (the full set is 53k); the other 10 datasets
+  came back clean on the 11 non-LIBERO datasets in this rerun.
+- **libero local copy**: metadata lists 1,693 episodes; 920 were found in the
+  downloaded parquet files and 773 were absent from the local copy. The local
+  copy is incomplete; this is not evidence that the complete upstream dataset
+  contains 773 empty episodes. RDA 0.5.3 falls back to the actual parquet
+  location when metadata `file_index` values are stale.
+- **bridge**: sampled 25 episodes (the full set is 53k); the other datasets
   were audited in full.
 - **aloha_sim_transfer_cube_human** was audited earlier at v0.5.1 with
   matching results (1/49/0, 1,535 spikes, 71.2% idle). It has since become a
@@ -39,7 +42,7 @@ Notes:
 
 ## Five patterns worth knowing before you train
 
-**1. Median idle runs 20.8%–93.3%, and 8 of 11 datasets sit above 65%.**
+**1. Median idle runs 20.8%–93.3%, and 10 of 12 datasets sit above 65%.**
 Loss functions trained on a 75%-idle distribution are structurally biased
 toward predicting "do nothing" unless you weight or curriculum around it.
 Bridge data pushes it to 93%. Measure yours before the GPU bill, not after.
@@ -58,14 +61,16 @@ smoothness regularization or you're doing sim-to-real action statistics,
 this number decides your curriculum.
 
 **4. Clean integrity ≠ good training data.**
-Integrity passed 11/11 — zero NaNs, zero timestamp reversals, zero missing
-frames anywhere. The behavior layer still flagged 45–98% of episodes for
-review in most datasets. Both layers matter; most pipelines check neither.
+Across the non-LIBERO datasets in this rerun, the integrity layers were clean
+except for the intentional `aloha_corrupted` fixture. The behavior layer still
+flagged many episodes for review in most datasets. Both layers matter; most
+pipelines check neither.
 
-**5. Cheap hardware produces the most expensive data.**
-The community SO-100 pick-place set: 86.7% median idle plus action spikes in
-every episode. If you're fine-tuning on hobby-robot uploads, this is what
-you're inheriting.
+**5. Benchmark scope matters.**
+The bridge result is a 25-episode sample, and `aloha_corrupted` is an intentional
+corruption fixture rather than a production dataset. Treat these numbers as
+observed signals in this local rerun, not as universal claims about a robot or
+upstream dataset.
 
 ## Reproduce
 

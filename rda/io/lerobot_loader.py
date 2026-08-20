@@ -30,6 +30,7 @@ field) or from the presence of ``meta/episodes.jsonl``.
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
@@ -258,6 +259,67 @@ def _load_episode_metadata_v30(dataset_path: Path):
 _load_episode_metadata = _load_episode_metadata_v30
 
 
+@lru_cache(maxsize=8)
+def _build_episode_file_index_v30(dataset_path: str) -> Dict[int, Path]:
+    """Build a cached ``episode_index`` -> data parquet path index.
+
+    The v3.0 metadata normally points to the right file, but some local
+    datasets have stale ``data/file_index`` values.  Only the small
+    ``episode_index`` column is read while building this fallback index, so
+    image/video columns are not loaded during the scan.
+    """
+    import pyarrow.parquet as pq
+
+    data_dir = Path(dataset_path) / "data"
+    if not data_dir.exists():
+        return {}
+
+    index: Dict[int, Path] = {}
+    for chunk_dir in sorted(data_dir.glob("chunk-*")):
+        for parquet_path in sorted(chunk_dir.glob("*.parquet")):
+            try:
+                table = pq.read_table(parquet_path, columns=["episode_index"])
+            except Exception:
+                continue
+            for value in set(table.column("episode_index").to_pylist()):
+                if value is not None:
+                    index.setdefault(int(value), parquet_path)
+    return index
+
+
+@lru_cache(maxsize=8)
+def _read_v30_fallback_file(parquet_path: str):
+    """Read one fallback file without image/video payload columns.
+
+    Fallback reads are used after the metadata mapping has already failed,
+    which is the audit path.  Keep timestamps, actions, numeric observations,
+    reward, and done while avoiding the large camera/video columns.  The
+    resulting per-file DataFrame is cached because a v3.0 file can contain
+    many episodes.
+    """
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    path = Path(parquet_path)
+    schema = pq.ParquetFile(path).schema_arrow
+    columns = []
+    for field in schema:
+        name = field.name
+        lower_name = name.lower()
+        if name == "episode_index":
+            columns.append(name)
+        elif name in {"timestamp", "action", "next.reward", "next.done"}:
+            columns.append(name)
+        elif name.startswith("action."):
+            columns.append(name)
+        elif name.startswith("observation.") and not any(
+            token in lower_name for token in ("image", "video")
+        ):
+            columns.append(name)
+
+    return pd.read_parquet(path, columns=columns)
+
+
 def _read_episode_parquet_v30(
     dataset_path: Path,
     ep_meta_row: dict,
@@ -289,9 +351,22 @@ def _read_episode_parquet_v30(
         / f"file-{file_idx:03d}.parquet"
     )
 
-    # Read only the rows for this episode
-    df = pd.read_parquet(parquet_path)
-    ep_df = df[df["episode_index"] == ep_index].reset_index(drop=True)
+    # Keep the metadata mapping as the fast path, but use an audit projection
+    # so camera/video payloads are never loaded merely to locate an episode.
+    # Some datasets have stale file_index values, so an empty match triggers
+    # one cached scan of the actual data files.
+    try:
+        df = _read_v30_fallback_file(str(parquet_path))
+        ep_df = df[df["episode_index"] == ep_index].reset_index(drop=True)
+    except (FileNotFoundError, OSError, KeyError):
+        ep_df = pd.DataFrame()
+
+    if ep_df.empty:
+        file_index = _build_episode_file_index_v30(str(dataset_path.resolve()))
+        actual_path = file_index.get(ep_index)
+        if actual_path is not None and actual_path != parquet_path:
+            df = _read_v30_fallback_file(str(actual_path))
+            ep_df = df[df["episode_index"] == ep_index].reset_index(drop=True)
 
     return _extract_episode_from_dataframe(ep_df, ep_index, fps, "v3.0")
 
