@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from rda.audit.dataset_audit import DatasetAuditResult
-from rda.audit.rules import AuditVerdict
+from rda.audit.rules import AuditVerdict, compute_behavior_severity
 from rda.metrics.base import MetricAvailability
 from rda.report.aggregation import aggregate_dataset_metrics
 from rda.report.summary import build_summary
@@ -50,6 +50,7 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
             "assessment": m.assessment,
             "details": m.details,
             "message": m.message,
+            "evidence_level": _evidence_level_for_metric(name),
             # Backward compat
             "passed": m.passed,
             "score": m.score,
@@ -157,6 +158,28 @@ _BEHAVIOR_VERDICT_MAP: Dict[AuditVerdict, str] = {
     AuditVerdict.REVIEW: "NEEDS_REVIEW",
     AuditVerdict.EXCLUDE: "RECOMMENDED_EXCLUDE",
 }
+
+# Evidence labels are deliberately explicit: statistical observations must not
+# be serialized as if they were deterministic corruption.
+_EVIDENCE_LEVEL_BY_METRIC: Dict[str, str] = {
+    "missing_dropout": "HARD_FAIL",
+    "invalid_values": "HARD_FAIL",
+    "schema_consistency": "HARD_FAIL",
+    "timestamp_validity": "HARD_FAIL",
+    "joint_limit": "HARD_FAIL",
+    "sensor_synchronization": "UNVERIFIABLE",
+    "sampling_jitter": "RISK_SIGNAL",
+    "velocity_acceleration": "RISK_SIGNAL",
+    "action_discontinuity": "RISK_SIGNAL",
+    "idle_ratio": "RISK_SIGNAL",
+    "distribution": "RISK_SIGNAL",
+    "coverage": "RISK_SIGNAL",
+}
+
+
+def _evidence_level_for_metric(metric_name: str) -> str:
+    """Return the user-facing evidence class for a metric."""
+    return _EVIDENCE_LEVEL_BY_METRIC.get(metric_name, "RISK_SIGNAL")
 
 
 def _build_integrity_check(ep_result) -> Dict[str, Any]:
@@ -311,15 +334,15 @@ def _determine_pattern_type(
     # Stuck: long duration + very low motion + normal spikes
     if dur > 0 and motion_low > 0.5 and spikes < 5:
         score = dur * motion_low
-        patterns.append(("STUCK", score))
+        patterns.append(("STUCK_LIKE", score))
 
     # Frozen: moderate duration + extremely low motion + very low spikes
     if motion_low > 0.8 and spikes < 2:
-        patterns.append(("FROZEN", motion_low * 10))
+        patterns.append(("FROZEN_LIKE", motion_low * 10))
 
     # Jittery: high spike count
     if spikes > 10:
-        patterns.append(("JITTERY", spikes))
+        patterns.append(("JITTERY_LIKE", spikes))
 
     # Inefficient: long duration + long path + normal motion
     if dur > 0 and path_len > 0 and motion_low < 0.3:
@@ -368,25 +391,25 @@ def _build_diagnosis(
     what_parts.append(f"effective motion = {motion_ratio:.0%}")
     what = "Episode " + ", ".join(what_parts) + "."
 
-    # WHY — interpretation based on pattern type
+    # WHY — keep statistical patterns explicitly observational.
     why_map: Dict[str, str] = {
-        "STUCK": "Robot appears stuck or obstructed — long duration with little effective motion.",
-        "FROZEN": "Episode appears frozen or failed — near-zero motion activity.",
-        "JITTERY": "Excessive action discontinuities — possible controller or sensor noise issue.",
-        "INEFFICIENT": "Inefficient execution path — long duration and path length with normal motion activity.",
-        "UNUSUAL": "Unusual trajectory pattern — may indicate novel but valid behavior.",
+        "STUCK_LIKE": "Observed a stuck-like low-motion pattern; this is a statistical signal, not proof of obstruction or failure.",
+        "FROZEN_LIKE": "Observed a frozen-like near-zero-motion pattern; valid waiting behavior or a failed episode cannot be distinguished from metrics alone.",
+        "JITTERY_LIKE": "Observed elevated action discontinuity; controller behavior, sensor noise, or a valid sharp maneuver may explain it.",
+        "INEFFICIENT": "Observed a long or unusual execution path; this may be valid task variation and requires context.",
+        "UNUSUAL": "Observed an unusual trajectory pattern; it may represent valid but rare behavior.",
     }
     why = why_map.get(primary or "", "No clear anomaly pattern detected.")
 
-    # NEXT — recommendation
+    # NEXT — recommendations remain human-review actions, never automatic labels.
     next_map: Dict[str, str] = {
-        "STUCK": "Review episode; robot may have encountered obstruction. Consider re-collecting.",
-        "FROZEN": "Likely failed episode. Recommend exclude unless manual review confirms otherwise.",
-        "JITTERY": "Review action smoothness. Check controller tuning or sensor noise.",
-        "INEFFICIENT": "Review execution path. Consider trajectory optimization or re-demonstration.",
-        "UNUSUAL": "Review trajectory visualization. May indicate novel but valid behavior.",
+        "STUCK_LIKE": "Review the episode and trajectory; confirm whether the low-motion segment is expected before re-collecting.",
+        "FROZEN_LIKE": "Review manually; do not exclude from the dataset based on this signal alone.",
+        "JITTERY_LIKE": "Review action smoothness and context; check controller tuning or sensor noise if the pattern is unexpected.",
+        "INEFFICIENT": "Review the execution path and task context before deciding whether optimization or re-demonstration is needed.",
+        "UNUSUAL": "Review the trajectory visualization and confirm whether this rare pattern is valid.",
     }
-    next_action = next_map.get(primary or "", "No action recommended.")
+    next_action = next_map.get(primary or "", "Review the available evidence before deciding how to handle the episode.")
 
     return {"what": what, "why": why, "next": next_action}
 
@@ -501,20 +524,55 @@ def generate_episode_report(
     reference = _build_reference_block(result)
     diagnosis = _build_diagnosis(ep_result, pattern_type, reason_vector)
 
-    # Collect issue codes from all failed metrics
+    # Separate deterministic failures, statistical observations, and metrics
+    # that could not be evaluated. Keep the legacy ``issues`` list intact.
     issues: List[str] = []
+    evidence_by_metric: Dict[str, str] = {}
+    risk_signals: List[str] = []
+    unverifiable: List[str] = []
     for m_name, m_result in ep_result.metrics.items():
+        if m_result.availability == MetricAvailability.NOT_AVAILABLE:
+            unverifiable.append(m_name)
+            evidence_by_metric[m_name] = "UNVERIFIABLE"
+            continue
         if m_result.availability != MetricAvailability.AVAILABLE:
             continue
+        evidence = _evidence_level_for_metric(m_name)
+        evidence_by_metric[m_name] = evidence
         if not m_result.passed:
             code = _issue_code_for_metric(m_name)
             if code not in issues:
                 issues.append(code)
 
+    # Observational metrics intentionally remain PASS-by-rules. Recompute the
+    # derived behavior evidence so it is visible in the user-facing schema.
+    _, behavior_findings = compute_behavior_severity(list(ep_result.metrics.values()))
+    for finding in behavior_findings:
+        metric = finding["metric"]
+        evidence_by_metric[metric] = "RISK_SIGNAL"
+        if metric not in risk_signals:
+            risk_signals.append(metric)
+        code = _issue_code_for_metric(metric)
+        if code not in issues:
+            issues.append(code)
+
+    hard_fail_issues = [
+        _issue_code_for_metric(name)
+        for name, level in evidence_by_metric.items()
+        if level == "HARD_FAIL" and _issue_code_for_metric(name) in issues
+    ]
+
     return {
         "episode_id": episode_index,
         "integrity_check": integrity_check,
         "behavior_verdict": behavior_verdict,
+        "evidence_level": "HARD_FAIL" if not integrity_check["passed"] else (
+            "RISK_SIGNAL" if risk_signals else "UNVERIFIABLE" if unverifiable else "NO_FINDING"
+        ),
+        "evidence_by_metric": evidence_by_metric,
+        "hard_fail_issues": hard_fail_issues,
+        "risk_signals": risk_signals,
+        "unverifiable_metrics": unverifiable,
         "deviation_score": deviation_score,
         "pattern_type": pattern_type,
         "reason_vector": reason_vector,
@@ -679,6 +737,43 @@ def _compute_quality_dimensions(result: DatasetAuditResult) -> Dict[str, float]:
     }
 
 
+def _build_evidence_summary(result: DatasetAuditResult) -> Dict[str, Any]:
+    """Summarize evidence classes without turning risk signals into failures."""
+    from rda.metrics import LAYER1_INTEGRITY
+
+    integrity_names = {cls.name for cls in LAYER1_INTEGRITY}
+    hard_fail_episodes = 0
+    risk_signal_episodes = 0
+    unverifiable_counts: Dict[str, int] = {}
+
+    for ep_result in result.episodes.values():
+        has_hard_fail = False
+        has_risk_signal = False
+        for name, metric in ep_result.metrics.items():
+            if metric.availability == MetricAvailability.NOT_AVAILABLE:
+                unverifiable_counts[name] = unverifiable_counts.get(name, 0) + 1
+            elif name in integrity_names and not metric.passed:
+                has_hard_fail = True
+
+        _, findings = compute_behavior_severity(list(ep_result.metrics.values()))
+        if findings:
+            has_risk_signal = True
+        if has_hard_fail:
+            hard_fail_episodes += 1
+        if has_risk_signal:
+            risk_signal_episodes += 1
+
+    return {
+        "hard_fail_episodes": hard_fail_episodes,
+        "risk_signal_episodes": risk_signal_episodes,
+        "unverifiable_metric_episodes": unverifiable_counts,
+        "interpretation": (
+            "Hard Fail is deterministic evidence; Risk Signal is an observational "
+            "pattern requiring confirmation; Unverifiable means the input was insufficient."
+        ),
+    }
+
+
 def _build_pattern_distribution(result: DatasetAuditResult) -> Dict[str, int]:
     """Count episodes per pattern type across the dataset.
 
@@ -689,10 +784,10 @@ def _build_pattern_distribution(result: DatasetAuditResult) -> Dict[str, int]:
         Dict mapping pattern type name to episode count.
     """
     counts: Dict[str, int] = {
-        "stuck": 0,
-        "jittery": 0,
+        "stuck_like": 0,
+        "jittery_like": 0,
         "inefficient": 0,
-        "frozen": 0,
+        "frozen_like": 0,
         "unusual": 0,
     }
 
@@ -762,6 +857,7 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
 
     # Pattern distribution
     pattern_dist = _build_pattern_distribution(result)
+    evidence_summary = _build_evidence_summary(result)
 
     # Estimated post-cleanup quality (simplified)
     # Assume cleaning removes EXCLUDE episodes and 50% of REVIEW issues
@@ -804,6 +900,7 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "review": review_count,
             "exclude": exclude_count,
         },
+        "evidence_summary": evidence_summary,
         "pattern_distribution": pattern_dist,
         "estimated_post_cleanup_quality": post_cleanup_dhi,
     }

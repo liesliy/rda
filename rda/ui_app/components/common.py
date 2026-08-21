@@ -12,7 +12,12 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from rda.audit.dataset_audit import DatasetAuditResult
-from rda.audit.rules import AuditVerdict, CRITICAL_METRICS, REVIEW_METRICS
+from rda.audit.rules import (
+    AuditVerdict,
+    CRITICAL_METRICS,
+    REVIEW_METRICS,
+    compute_behavior_severity,
+)
 from rda.metrics.base import MetricAvailability
 from rda.report.aggregation import aggregate_dataset_metrics
 
@@ -27,13 +32,13 @@ def _dhi_detail(key: str, lang: str, **kwargs) -> str:
             "empty": "数据集中无 episode",
             "ready": f"数据可直接用于训练，共 {kwargs.get('total', 0)} 个 episode",
             "cond": f"审核 {kwargs.get('review', 0)} 个 episode 后可用于训练",
-            "not_ready": "存在显著质量问题，建议先处理数据",
+            "not_ready": "存在需要人工确认的审计信号或结构性问题，建议先复核数据",
         },
         "en": {
             "empty": "No episodes in dataset",
             "ready": f"Data is ready for training — {kwargs.get('total', 0)} episodes",
             "cond": f"Usable for training after reviewing {kwargs.get('review', 0)} episodes",
-            "not_ready": "Significant quality issues found — clean the data first",
+            "not_ready": "Deterministic issues or review signals found — inspect the evidence first",
         },
     }
     return table.get(lang, table["zh"]).get(key, key)
@@ -260,30 +265,31 @@ def make_radar_chart(dimensions: Dict[str, float], lang: str = "zh") -> go.Figur
 # ---------------------------------------------------------------------------
 
 def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[str, Any]:
-    """统计问题分布。
+    """统计确定性问题、统计风险信号和无法验证项。
 
-    Returns:
-        {
-            "critical": int,   # 有 critical 问题的 episode 数
-            "warning": int,    # 有 review 级别问题的 episode 数
-            "info": int,       # 提示性观察
-            "top_issues": [{"code": str, "count": int, "severity": str,
-                            "description": str, "pattern_type": str|None}, ...]
-        }
+    Observational metrics intentionally return ``passed=True``. Their raw
+    measurements are therefore converted into risk signals here so the UI
+    does not silently hide them or mislabel them as hard failures.
     """
     total = result.num_episodes
     if total == 0:
-        return {"critical": 0, "warning": 0, "info": 0, "top_issues": []}
+        return {
+            "critical": 0, "warning": 0, "risk_signal": 0,
+            "unverifiable": 0, "info": 0, "top_issues": [],
+        }
 
-    # 按 metric 统计失败数
     fail_counts: Dict[str, int] = {}
     critical_eps = 0
-    warning_eps = 0
+    risk_signal_eps = 0
+    unverifiable_metrics: Dict[str, int] = {}
 
     for ep in result.episodes.values():
         ep_critical = False
-        ep_warning = False
+        ep_risk = False
         for m_name, m in ep.metrics.items():
+            if m.availability == MetricAvailability.NOT_AVAILABLE:
+                unverifiable_metrics[m_name] = unverifiable_metrics.get(m_name, 0) + 1
+                continue
             if m.availability != MetricAvailability.AVAILABLE:
                 continue
             if not m.passed:
@@ -291,11 +297,20 @@ def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[st
                 if m_name in CRITICAL_METRICS:
                     ep_critical = True
                 elif m_name in REVIEW_METRICS:
-                    ep_warning = True
+                    ep_risk = True
+
+        # Pure observational behavior signals are not metric failures, but
+        # they still belong in the review queue and evidence summary.
+        _, behavior_findings = compute_behavior_severity(list(ep.metrics.values()))
+        for finding in behavior_findings:
+            metric = finding["metric"]
+            fail_counts[metric] = fail_counts.get(metric, 0) + 1
+            ep_risk = True
+
         if ep_critical:
             critical_eps += 1
-        elif ep_warning:
-            warning_eps += 1
+        if ep_risk:
+            risk_signal_eps += 1
 
     # 问题描述映射（双语）
     issue_desc = {
@@ -308,9 +323,9 @@ def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[st
             "sensor_synchronization": "多传感器同步偏差",
             "sampling_jitter": "采样抖动",
             "velocity_acceleration": "速度/加速度异常",
-            "action_discontinuity": "动作不连续（抖动）",
-            "idle_ratio": "有效运动比例过低",
-            "distribution": "轨迹分布离群",
+            "action_discontinuity": "观察到动作不连续模式（风险信号）",
+            "idle_ratio": "观察到有效运动比例偏低（风险信号）",
+            "distribution": "观察到轨迹分布偏离（风险信号）",
             "coverage": "状态空间覆盖不足",
         },
         "en": {
@@ -322,9 +337,9 @@ def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[st
             "sensor_synchronization": "Multi-sensor sync deviation",
             "sampling_jitter": "Sampling jitter",
             "velocity_acceleration": "Velocity/acceleration anomalies",
-            "action_discontinuity": "Action discontinuity (jitter)",
-            "idle_ratio": "Low effective-motion ratio",
-            "distribution": "Trajectory distribution outlier",
+            "action_discontinuity": "Observed action discontinuity pattern (risk signal)",
+            "idle_ratio": "Observed low effective-motion ratio (risk signal)",
+            "distribution": "Observed trajectory-distribution deviation (risk signal)",
             "coverage": "Insufficient state-space coverage",
         },
     }
@@ -337,11 +352,11 @@ def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[st
         "schema_consistency": None,
         "timestamp_validity": None,
         "joint_limit": None,
-        "action_discontinuity": "Jittery",
-        "idle_ratio": "Stuck/Frozen",
-        "distribution": "Inefficient",
-        "velocity_acceleration": "Jittery",
-        "coverage": "Unusual",
+        "action_discontinuity": "Jitter-like (risk signal)",
+        "idle_ratio": "Stuck/Frozen-like (risk signal)",
+        "distribution": "Inefficient-like (risk signal)",
+        "velocity_acceleration": "Jitter-like (risk signal)",
+        "coverage": "Unusual-like (risk signal)",
     }
 
     top_issues = []
@@ -357,12 +372,20 @@ def compute_issue_stats(result: DatasetAuditResult, lang: str = "zh") -> Dict[st
             "severity": severity,
             "description": desc_table.get(code, code),
             "pattern_type": metric_to_pattern.get(code),
+            "evidence_level": "HARD_FAIL" if code in CRITICAL_METRICS else (
+                "RISK_SIGNAL" if code in REVIEW_METRICS else "UNVERIFIABLE"
+            ),
         })
 
     return {
         "critical": critical_eps,
-        "warning": warning_eps,
-        "info": 0,  # info 级别的作为观察而非问题计数
+        # Keep the legacy key as an alias for callers that still render a
+        # warning card, but expose the evidence-specific name as canonical.
+        "warning": risk_signal_eps,
+        "risk_signal": risk_signal_eps,
+        "unverifiable": sum(unverifiable_metrics.values()),
+        "unverifiable_metrics": unverifiable_metrics,
+        "info": 0,
         "top_issues": top_issues,
     }
 
@@ -470,13 +493,13 @@ def _detect_pattern_type(ep_result) -> Optional[str]:
 
     # 判定
     if idle_low and spikes_high:
-        return "Stuck"
+        return "Stuck-like (risk signal)"
     if idle_low and not spikes_high:
-        return "Frozen"
+        return "Frozen-like (risk signal)"
     if spikes_high and not idle_low:
-        return "Jittery"
+        return "Jitter-like (risk signal)"
     if duration_long and not idle_low:
-        return "Inefficient"
+        return "Inefficient-like (risk signal)"
 
     # 检查是否有 review 级别的行为异常
     has_behavior_issue = False
@@ -485,7 +508,7 @@ def _detect_pattern_type(ep_result) -> Optional[str]:
             has_behavior_issue = True
             break
     if has_behavior_issue:
-        return "Unusual"
+        return "Unusual-like (risk signal)"
 
     return None
 

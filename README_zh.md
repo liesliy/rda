@@ -25,6 +25,8 @@ RDA 审计机器人操作数据集（LeRobot 格式）的完整性、时序一�
   - 每条建议都带置信度（HIGH / EXPERIMENTAL / NOT_RECOMMENDED）
 - **LeRobot v2.1 + v3.0** 双格式自动识别
 - **三档判定**：PASS / REVIEW / EXCLUDE
+- **证据分层报告**：分别展示 HARD_FAIL / RISK_SIGNAL / UNVERIFIABLE；统计信号不会被表述为已确认的数据错误
+- **盲审支持**：可生成不提前暴露 RDA 结论的人工标注样本，并在外部 QC 标签回填后进行对照
 - **CLI 优先设计**：JSON + 文本输出，管道友好
 - **时序充分性分析**：空闲检测、有效动作段分布、有效窗口比例
 

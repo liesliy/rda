@@ -173,9 +173,16 @@ st.caption(t("health_usable_caption"))
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Top Issues
+# Top Audit Observations
 # ---------------------------------------------------------------------------
 st.subheader(t("health_top_issues_header"))
+st.caption(
+    "确定性结构问题可支持规则排除；Risk Signal 只表示统计异常，"
+    "Unverifiable 表示当前输入不足以判断，三者都不替代人工确认。"
+    if get_lang() == "zh" else
+    "Deterministic failures can support a rule-based exclusion; Risk Signals are statistical observations, "
+    "and Unverifiable means the current input is insufficient. None replaces manual confirmation."
+)
 
 issue_stats = compute_issue_stats(result, lang=get_lang())
 top_issues = issue_stats["top_issues"]
@@ -191,9 +198,19 @@ else:
     with col1:
         st.metric(t("health_metric_critical"), issue_stats["critical"])
     with col2:
-        st.metric(t("health_metric_warning"), issue_stats["warning"])
+        st.metric(t("health_metric_warning"), issue_stats["risk_signal"])
     with col3:
         st.metric(t("health_metric_types"), len(top_issues))
+
+    if issue_stats.get("unverifiable"):
+        st.info(
+            (
+                f"当前有 {issue_stats['unverifiable']} 个指标无法验证；这不等于通过。"
+                if get_lang() == "zh" else
+                f"{issue_stats['unverifiable']} metric evaluations were unavailable; this does not mean PASS."
+            ),
+            icon="ℹ️",
+        )
 
     st.write("")
 
@@ -221,7 +238,7 @@ else:
             cols = st.columns(4)
             with cols[0]:
                 st.caption(t("health_lbl_severity"))
-                st.write(f"{sev_color} {sev_label}")
+                st.write(f"{sev_color} {sev_label} · {issue.get('evidence_level', 'RISK_SIGNAL')}")
             with cols[1]:
                 st.caption(t("health_lbl_scope"))
                 st.write(f"{issue['count']} / {total} episodes")

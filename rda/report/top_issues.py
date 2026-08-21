@@ -59,7 +59,11 @@ def _describe_action_disc(dataset_metrics: Dict[str, Any], total: int) -> str:
     total_spikes = disc.get("total_spikes", 0)
     affected = disc.get("episodes_with_spikes", 0)
     ratio = affected / total if total > 0 else 0.0
-    return f"Action discontinuity: {total_spikes} spike(s) across {affected} episode(s) ({ratio:.0%})"
+    return (
+        f"Observed action discontinuity: {total_spikes} spike(s) across "
+        f"{affected} episode(s) ({ratio:.0%}); statistical risk signal, "
+        "not confirmed corruption"
+    )
 
 
 def _describe_coverage(dataset_metrics: Dict[str, Any], total: int) -> str:
@@ -114,6 +118,7 @@ def compute_top_observations(
             "metric": metric_name,
             "description": _describe_integrity(metric_name, fail_count, total_episodes),
             "significance": "high",
+            "evidence_level": "HARD_FAIL",
             "layer": "integrity",
             "affected_episodes": fail_count,
             "affected_ratio": fail_count / total_episodes,
@@ -132,6 +137,7 @@ def compute_top_observations(
             "metric": "sensor_synchronization",
             "description": _describe_sensor_sync(dataset_metrics, total_episodes),
             "significance": "medium",
+            "evidence_level": "UNVERIFIABLE" if sync_na else "RISK_SIGNAL",
             "layer": "temporal_motion",
             "affected_episodes": sync_available,
             "affected_ratio": sync_available / total_episodes,
@@ -143,6 +149,7 @@ def compute_top_observations(
             "metric": "sensor_synchronization",
             "description": _describe_sensor_sync(dataset_metrics, total_episodes),
             "significance": "info",
+            "evidence_level": "UNVERIFIABLE",
             "layer": "temporal_motion",
             "affected_episodes": 0,
             "affected_ratio": 0.0,
@@ -159,6 +166,7 @@ def compute_top_observations(
             "metric": "action_discontinuity",
             "description": _describe_action_disc(dataset_metrics, total_episodes),
             "significance": "medium" if disc_affected / total_episodes < 0.1 else "high",
+            "evidence_level": "RISK_SIGNAL",
             "layer": "temporal_motion",
             "affected_episodes": disc_affected,
             "affected_ratio": disc_affected / total_episodes,
@@ -182,8 +190,12 @@ def compute_top_observations(
         )
         observations.append({
             "metric": "velocity_acceleration",
-            "description": f"Extreme acceleration spikes: {vel_spikes_total} across {vel_affected} episode(s)",
+            "description": (
+                f"Observed extreme acceleration spikes: {vel_spikes_total} across "
+                f"{vel_affected} episode(s); statistical risk signal"
+            ),
             "significance": "low",
+            "evidence_level": "RISK_SIGNAL",
             "layer": "temporal_motion",
             "affected_episodes": vel_affected,
             "affected_ratio": vel_affected / total_episodes,
@@ -201,6 +213,7 @@ def compute_top_observations(
             "metric": "state_space_occupancy",
             "description": _describe_coverage(dataset_metrics, total_episodes),
             "significance": "medium" if median_occ < 0.1 else "low",
+            "evidence_level": "RISK_SIGNAL",
             "layer": "dataset_utility",
             "affected_episodes": sso.get("available_episodes", 0),
             "affected_ratio": sso.get("available_episodes", 0) / total_episodes,
@@ -217,8 +230,12 @@ def compute_top_observations(
         if median_idle > 0.3:
             observations.append({
                 "metric": "idle_ratio",
-                "description": f"High idle ratio: median {median_idle:.1%} idle, {median_effective:.1%} effective motion",
+                "description": (
+                    f"Observed low effective motion: median {median_effective:.1%} "
+                    f"effective motion ({median_idle:.1%} idle); statistical risk signal"
+                ),
                 "significance": "medium",
+                "evidence_level": "RISK_SIGNAL",
                 "layer": "dataset_utility",
                 "affected_episodes": idle.get("available_episodes", 0),
                 "affected_ratio": idle.get("available_episodes", 0) / total_episodes,

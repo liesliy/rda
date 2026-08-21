@@ -189,14 +189,20 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     if disc:
         total_spikes = disc.get("total_spikes", 0)
         affected = disc.get("episodes_with_spikes", 0)
-        lines.append(f"  action_discontinuity      {total_spikes} spikes in {affected} episodes (observational)")
+        lines.append(
+            f"  action_discontinuity      {total_spikes} spikes in {affected} episodes "
+            "(RISK_SIGNAL: observational, not confirmed corruption)"
+        )
 
     # Velocity
     vel = temporal.get("velocity_acceleration", {})
     if vel:
         vel_p95 = vel.get("velocity_p95", {})
         median_v = vel_p95.get("median", 0.0)
-        lines.append(f"  velocity_acceleration     median velocity p95 = {median_v:.4f} (observational)")
+        lines.append(
+            f"  velocity_acceleration     median velocity p95 = {median_v:.4f} "
+            "(RISK_SIGNAL: observational, not confirmed corruption)"
+        )
 
     # Temporal sufficiency
     ts = temporal.get("temporal_sufficiency", {})
@@ -234,7 +240,11 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
         effective_stats = idle.get("effective_motion_ratio", {})
         median_idle = idle_stats.get("median", 0.0)
         median_eff = effective_stats.get("median", 0.0)
-        lines.append(f"  idle_ratio                median idle = {median_idle:.1%}, effective motion = {median_eff:.1%}")
+        lines.append(
+            f"  idle_ratio                median idle = {median_idle:.1%}, "
+            f"effective motion = {median_eff:.1%} "
+            "(RISK_SIGNAL: observational, not confirmed failure)"
+        )
 
     # Distribution
     dist = utility.get("distribution", {})

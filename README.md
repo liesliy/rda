@@ -25,6 +25,8 @@ RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal 
   - All suggestions include confidence levels (HIGH / EXPERIMENTAL / NOT_RECOMMENDED)
 - **LeRobot v2.1 + v3.0** dual-format auto-detection
 - **Three-tier verdicts**: PASS / REVIEW / EXCLUDE
+- **Evidence-aware reporting**: HARD_FAIL / RISK_SIGNAL / UNVERIFIABLE are shown separately; statistical signals are not presented as confirmed corruption
+- **Blind-validation support**: generate annotator-safe samples and compare against external QC labels without exposing RDA verdicts before review
 - **CLI-first design**: JSON + text output, pipe-friendly
 - **Temporal sufficiency analysis**: idle detection, active run distribution, valid window ratios
 

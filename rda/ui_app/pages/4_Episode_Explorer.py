@@ -74,6 +74,11 @@ def _render_review_queue(table_df: pd.DataFrame) -> None:
 
             with col_info:
                 st.markdown(f"{t('ep_frames')}: {num_frames}  ·  **Pattern Type**: `{pattern}`")
+                st.caption(
+                    "Pattern Type 是统计风险模式，不是已确认的故障；请结合轨迹和任务语义人工确认。"
+                    if get_lang() == "zh" else
+                    "Pattern Type is a statistical risk pattern, not a confirmed failure; confirm it with trajectory and task context."
+                )
                 st.markdown(f"{t('ep_main_issues')}: {top_issues}")
 
                 # Notes input
@@ -249,8 +254,15 @@ def _render_episode_detail(ep_id: int) -> None:
 
         # Pattern Type
         if ep_row is not None and ep_row["pattern_type"] != "—":
-            st.caption("Pattern Type")
-            st.info(f"`{ep_row['pattern_type']}`")
+            st.caption("Pattern Type · Risk Signal")
+            st.info(
+                f"`{ep_row['pattern_type']}`\n\n"
+                + (
+                    "这是统计模式，不等于已确认的数据错误。"
+                    if get_lang() == "zh" else
+                    "This is a statistical pattern, not a confirmed data error."
+                )
+            )
 
     st.divider()
 
@@ -585,7 +597,8 @@ def _plot_timeseries(
                             opacity=0.4,
                         )
 
-    # Red background highlight for anomaly regions
+    # Highlight detected statistical-anomaly regions; they are not confirmed
+    # error regions and are labeled accordingly in the chart.
     if anomaly_regions:
         for start, end, label in anomaly_regions:
             fig.add_vrect(
@@ -594,7 +607,7 @@ def _plot_timeseries(
                 fillcolor="red",
                 opacity=0.12,
                 line_width=0,
-                annotation_text=label,
+                annotation_text=f"Risk signal: {label}",
                 annotation_position="top",
             )
 
