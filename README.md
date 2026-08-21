@@ -62,6 +62,15 @@ With the Streamlit web UI:
 pip install robot-data-audit[ui]
 ```
 
+## Share real-world feedback
+
+If you run RDA on a real workflow, dataset, or existing QC process, please share
+what you observed through the [real-world feedback form](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml).
+You do not need to upload data. Describe the version, format, command, and
+observable result; an independent QC result or human review is especially useful.
+Please remove raw data, private paths, customer information, and credentials.
+A public issue is not a substitute for confidential disclosure.
+
 ## Quick Start
 
 ### 1. Audit a dataset

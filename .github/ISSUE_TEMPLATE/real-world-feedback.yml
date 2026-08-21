@@ -1,0 +1,103 @@
+name: Real-world usage feedback
+description: Share an observed RDA result or workflow experience without uploading dataset contents.
+title: "[Feedback] "
+labels:
+  - real-world-feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying RDA. This form is for observed usage feedback, not for proving that RDA is correct.
+
+        Do not include raw data, file paths, internal robot names, customer names, private URLs, credentials, or proprietary QC exports. Use an anonymous description instead.
+
+  - type: input
+    id: rda-version
+    attributes:
+      label: RDA version
+      description: Run `rda --version` and paste the result.
+      placeholder: "0.5.4"
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, operating system, and install method. Do not include hostnames or private paths.
+      placeholder: "Python 3.12, Ubuntu 24.04, pip install robot-data-audit[lerobot]"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dataset-format
+    attributes:
+      label: Dataset format
+      options:
+        - LeRobot v2.1
+        - LeRobot v3.0
+        - Other tabular or parquet format
+        - Unknown
+    validations:
+      required: true
+
+  - type: dropdown
+    id: usage-context
+    attributes:
+      label: Usage context
+      options:
+        - Local development or research
+        - Pre-training data screening
+        - Existing QC workflow comparison
+        - Blind review or annotation study
+        - CI or batch pipeline
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed-result
+    attributes:
+      label: What did you observe?
+      description: Describe the input shape, command used, and objective output. Do not paste raw trajectories or proprietary report contents.
+      placeholder: "I ran ... on an anonymized dataset with about ... episodes. The command completed/failed with ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: independent-check
+    attributes:
+      label: Independent check or existing QC
+      description: If available, describe whether an existing QC result or an independent human review agreed or disagreed. It is fine to say that no independent check exists yet.
+      placeholder: "Existing QC available: yes/no. Independent review available: yes/no. High-level agreement or disagreement: ..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: follow-up
+    attributes:
+      label: Follow-up preference
+      options:
+        - Public technical discussion is okay
+        - Prefer private follow-up
+        - I only want to report a bug
+        - No follow-up needed
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I have removed raw data, private paths, credentials, customer information, and other confidential details.
+          required: true
+        - label: I understand that a GitHub issue is public unless I choose private follow-up through the project contact.
+          required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add a minimal reproducible command, sanitized error message, or a link to a public dataset if relevant.
+      render: shell

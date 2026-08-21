@@ -61,6 +61,11 @@ pip install robot-data-audit[lerobot]
 pip install robot-data-audit[ui]
 ```
 
+## 分享真实使用反馈
+
+如果你在真实数据流程、数据集或现有 QC 流程中运行了 RDA，欢迎通过[真实使用反馈表](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)分享观察结果。
+不需要上传数据，只需说明版本、数据格式、运行命令和客观现象；如果有独立 QC 结果或人工复核，也请说明是否一致。请删除原始数据、私有路径、客户信息和凭据。公开 Issue 不适合提交机密信息。
+
 ## 快速开始
 
 ### 1. 审计一个数据集
