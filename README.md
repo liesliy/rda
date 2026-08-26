@@ -6,11 +6,13 @@
 [![Downloads](https://static.pepy.tech/badge/robot-data-audit)](https://pepy.tech/project/robot-data-audit)
 [![Tests](https://github.com/liesliy/rda/actions/workflows/ci.yml/badge.svg)](https://github.com/liesliy/rda/actions/workflows/ci.yml)
 
-> **Quality auditing + optimization recommendations for robot datasets.**
-> Diagnose data quality issues. Get actionable, confidence-graded suggestions.
-> RDA is a **diagnostic tool** — it does NOT guarantee training success rate improvements.
+> **RDA — Independent Quality Assessment for Robot Data**
+> An open, reproducible protocol for independent robot dataset quality assessment.
+> Runs locally. Your data never leaves your machine.
+>
+> RDA is a **diagnostic tool**. It does **not** guarantee training success-rate improvements.
 
-RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal consistency, motion quality, and distribution coverage. It then generates optimization recommendations calibrated to your target model architecture.
+RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal consistency, motion quality, and distribution coverage — then generates optimization recommendations calibrated to your target model architecture. Use it as an independent check before you accept a vendor dataset, train a policy, or publish a benchmark.
 
 <img width="2549" height="1403" alt="rda-firstpage" src="https://github.com/user-attachments/assets/35173b6a-275c-466c-985f-9674f7a59a1d" />
 

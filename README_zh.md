@@ -1,4 +1,4 @@
-# RDA (Robot Data Audit) — 机器人数据集体检工具
+# RDA (Robot Data Audit) — 机器人数据独立验收审计
 
 [![PyPI](https://img.shields.io/pypi/v/robot-data-audit)](https://pypi.org/project/robot-data-audit/)
 [![Python](https://img.shields.io/pypi/pyversions/robot-data-audit)](https://pypi.org/project/robot-data-audit/)
@@ -6,11 +6,12 @@
 [![Downloads](https://static.pepy.tech/badge/robot-data-audit)](https://pepy.tech/project/robot-data-audit)
 [![Tests](https://github.com/liesliy/rda/actions/workflows/ci.yml/badge.svg)](https://github.com/liesliy/rda/actions/workflows/ci.yml)
 
-> **机器人数据集质量审计 + 优化建议。**
-> 先诊断数据问题，再给带置信度的修复建议。
-> RDA 是**诊断工具**——不保证训练成功率提升。
+> **RDA — 机器人数据的独立质量评估协议**
+> 开源、可复现、本地运行。数据不出你的机器。
+>
+> RDA 是**诊断工具**，不保证训练成功率提升。
 
-RDA 审计机器人操作数据集（LeRobot 格式）的完整性、时序一致性、运动质量和分布覆盖，然后基于你的目标模型架构生成优化建议。
+RDA 审计机器人操作数据集（LeRobot 格式）的完整性、时序一致性、运动质量和分布覆盖，再按目标模型架构给出优化建议。适合在验收供应商数据、开训、或发布 benchmark 之前做一次独立检查。
 
 <img width="2549" height="1403" alt="rda首页" src="https://github.com/user-attachments/assets/35173b6a-275c-466c-985f-9674f7a59a1d" />
 
