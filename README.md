@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://static.pepy.tech/badge/robot-data-audit)](https://pepy.tech/project/robot-data-audit)
 [![Tests](https://github.com/liesliy/rda/actions/workflows/ci.yml/badge.svg)](https://github.com/liesliy/rda/actions/workflows/ci.yml)
+[![RDA audit](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_pusht.svg)](docs/examples/rda_report_pusht.html)
 
 > **RDA — Independent Quality Assessment for Robot Data**
 > An open, reproducible protocol for independent robot dataset quality assessment.
@@ -67,6 +68,20 @@ detection artifact we chose to publish anyway):
 Methodology and other experiment write-ups (i18n smoke test, server deploy
 verify, the spike/verdict bug regression pin, wheel leak guard):
 **[experiments/](experiments/)**
+
+## Shareable report + README badge
+
+Every audit can render into a **single-file HTML report** (no external assets,
+verdict cards, three-layer metric table, per-episode strip) and a
+**shields-style SVG badge** — so a dataset you audited carries its own proof:
+
+```bash
+python tools/rda_render.py rda_report.json --html report.html --badge badge.svg
+```
+
+Live example (real audit of `lerobot/pusht`, 206 episodes):
+**[report HTML](docs/examples/rda_report_pusht.html)** ·
+![badge](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_pusht.svg)
 
 ## Installation
 
