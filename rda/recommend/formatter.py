@@ -38,9 +38,20 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
     lines: List[str] = []
 
     # Header with rules version
+    is_offline = result.rules_version == "offline-fallback"
     rules_tag = f"  (rules v{result.rules_version})" if result.rules_version else ""
     lines.append("=" * 60)
-    lines.append(f"  RDA Recommend{rules_tag}")
+    if is_offline:
+        if lang == "zh":
+            lines.append("  RDA Recommend  [离线保守模式]")
+        else:
+            lines.append("  RDA Recommend  [offline conservative mode]")
+        if lang == "zh":
+            lines.append("  注意：本次结果由本地保守规则生成，未经服务端规则引擎评估。")
+        else:
+            lines.append("  Note: graded by built-in local rules, not the server-side engine.")
+    else:
+        lines.append(f"  RDA Recommend{rules_tag}")
     lines.append("=" * 60)
     lines.append("")
 
@@ -153,6 +164,11 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
     # Cache indicator
     if result.rules_version:
         lines.append(f"  Rules version: {result.rules_version}")
+    if is_offline:
+        if lang == "zh":
+            lines.append("  恢复联网后重新运行 recommend 可获得完整服务端评估。")
+        else:
+            lines.append("  Re-run recommend when online for the full server-side evaluation.")
     lines.append("=" * 60)
 
     return "\n".join(lines)
