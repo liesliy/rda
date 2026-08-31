@@ -56,7 +56,7 @@ Every audit can also render into a shareable single-file HTML report and a READM
 python tools/rda_render.py rda_report.json --html report.html --badge badge.svg
 ```
 
-More: [CLI reference & metrics table](docs/benchmark.md) · [experiments](experiments/) · [real-world feedback form](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
+More: [CLI reference & metrics table](docs/cli.md) · [experiments](experiments/) · [real-world feedback form](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
 
 ## Citation
 
