@@ -25,6 +25,7 @@ from rda.recommend.types import (
     RecommendationResult,
     TargetPolicy,
 )
+from rda.recommend.local_fallback import build_offline_result
 from rda.recommend.temporal_metrics import (
     DatasetTemporalSufficiency,
     TemporalSufficiency,
@@ -242,6 +243,7 @@ def run_recommendation(
     total_frames: int,
     progress_callback=None,
     lang: str = "zh",
+    offline: bool = False,
 ) -> RecommendationResult:
     """Run the full recommendation pipeline.
 
@@ -252,8 +254,9 @@ def run_recommendation(
       1. Compute temporal sufficiency metrics locally (heavy lifting)
       2. Check local cache for a previous result
       3. Try calling the API
-      4. If API fails → use cache if available, else error
-      5. Save successful API response to cache
+      4. If API fails -> use cache if available
+      5. If no cache -> conservative local fallback (never a hard error)
+      6. Save successful API response to cache
 
     Args:
         episodes_iter: Iterator yielding EpisodeData objects.
@@ -263,6 +266,9 @@ def run_recommendation(
         progress_callback: Optional callback(step, total, message).
         lang: Language of the returned copy ("zh" or "en"). Cached
             per-language so switching languages does not mix copy.
+        offline: Skip the API entirely and use the conservative local
+            fallback. Use this on machines that must never make network
+            calls (air-gapped clusters, private deployment QA, etc.).
 
     Returns:
         RecommendationResult with recommendations and rules_version.
@@ -280,6 +286,16 @@ def run_recommendation(
         total_frames=total_frames,
         progress_callback=progress_callback,
     )
+
+    # Explicit offline mode: never touch the network, straight to fallback
+    if offline:
+        import click
+        click.echo(
+            "  [Offline mode] Using conservative local fallback "
+            "(rules not evaluated server-side).",
+            err=True,
+        )
+        return build_offline_result(agg, target_policy, lang=lang)
 
     # Step 2: Check cache
     key = _cache_key(agg, policy_name, lang)
@@ -329,9 +345,17 @@ def run_recommendation(
         }
         return RecommendationResult.from_dict(full_data)
 
-    # No cache, no API — error
-    raise ConnectionError(
-        f"Recommend service is unavailable: {api_error}\n"
-        f"Run `rda audit` to see metrics locally.\n"
-        f"For private deployment, set RDA_API_URL environment variable."
+    # No cache, no API — conservative local fallback instead of a hard error.
+    # The metrics (heavy lifting) are already computed client-side; grading
+    # them with built-in conservative rules is strictly more useful than
+    # failing. Every paid / private-deployment scenario must survive an
+    # unreachable recommendation server.
+    import click
+    click.echo(
+        f"  [Warning] API unavailable ({api_error[:80] if api_error else 'unknown'}) "
+        "and no cached result. Falling back to conservative local evaluation "
+        "(rules_version=offline-fallback). Re-run online for the full "
+        "server-side evaluation.",
+        err=True,
     )
+    return build_offline_result(agg, target_policy, lang=lang)
