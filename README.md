@@ -42,6 +42,28 @@ RDA has been run over **12 local LeRobot-format datasets — 4,959 episodes** �
 
 Full table, per-dataset numbers, and the five recurring patterns: **[docs/benchmark.md](docs/benchmark.md)**
 
+## Blind test: manufactured defects, measured detection
+
+Observation on public data is half the story. The other half is a dataset
+whose ground truth we control. We took `lerobot/pusht` (206 episodes),
+injected **50 defective episodes across 5 defect classes** (empty episode,
+NaN state, reversed timestamps, frozen episode, duplicate frames; seed=42),
+left **156 episodes untouched as controls**, and ran RDA 0.5.4 with default
+thresholds:
+
+| Criterion | Precision | Recall | False positives |
+|---|---|---|---|
+| Strict (EXCLUDE = flagged) | **1.000** | 0.800 | **0 / 156 controls** |
+| Broad (EXCLUDE + REVIEW) | — | **1.000** | — |
+
+Every integrity defect (empty / NaN / timestamp) was caught 10/10 with
+EXCLUDE. Frozen episodes were caught 10/10 as REVIEW (`idle_ratio`:
+effective motion 0.0%) — a statistical signal, not a hard failure, by design.
+All 156 control verdicts are identical to the clean-baseline audit. Full
+methodology, per-class table, and honest caveats (including a duplicate-frame
+detection artifact we chose to publish anyway):
+**[docs/blind_test_20260831.md](docs/blind_test_20260831.md)**
+
 Methodology and other experiment write-ups (i18n smoke test, server deploy
 verify, the spike/verdict bug regression pin, wheel leak guard):
 **[experiments/](experiments/)**
