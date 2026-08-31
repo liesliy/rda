@@ -56,7 +56,7 @@ rda ui
 python tools/rda_render.py rda_report.json --html report.html --badge badge.svg
 ```
 
-更多：[CLI 参考与指标表](docs/benchmark.md) · [实验记录](experiments/) · [真实使用反馈表](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
+更多：[CLI 参考与指标表](docs/cli.md) · [实验记录](experiments/) · [真实使用反馈表](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
 
 ## 引用
 
