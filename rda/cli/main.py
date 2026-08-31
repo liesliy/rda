@@ -446,6 +446,16 @@ def example() -> None:
     help="Language of the recommendation text (zh / en).",
 )
 @click.option(
+    "--offline",
+    is_flag=True,
+    default=False,
+    help=(
+        "Never contact the recommendation API; grade with the built-in "
+        "conservative local rules instead (rules_version=offline-fallback). "
+        "For air-gapped machines and strict private deployments."
+    ),
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -458,6 +468,7 @@ def recommend(
     output_format: str,
     output: Optional[Path],
     lang: str,
+    offline: bool,
     verbose: bool,
 ) -> None:
     """Generate data optimization recommendations for the dataset at PATH.
@@ -488,6 +499,7 @@ def recommend(
       rda recommend /path/to/dataset --policy frame-wise
       rda recommend /path/to/dataset --policy temporal
       rda recommend /path/to/dataset --lang en --format json -o rec.json
+      rda recommend /path/to/dataset --offline   (never contacts the API)
 
     \b
     Environment:
@@ -539,6 +551,7 @@ def recommend(
                 ) if verbose else None
             ),
             lang=lang,
+            offline=offline,
         )
     except Exception as e:
         click.echo(f"Error: Recommendation failed: {e}", err=True)
