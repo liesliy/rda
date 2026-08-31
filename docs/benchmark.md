@@ -1,6 +1,6 @@
-# Benchmark: RDA on 12 Local Robot Datasets
+# Benchmark: RDA on 12 Local Robot Datasets + Blind Test
 
-**RDA version**: 0.5.3 · **Scope**: 4,959 episodes · **Last run**: 2026-08-20
+**RDA version**: 0.5.4 · **Scope**: 4,959 episodes (observation) + 206 episodes (blind test) · **Last run**: 2026-08-31
 
 We ran `rda audit` across 12 local LeRobot-format datasets — sim and real,
 scripted and human teleop, research arms and hobby hardware — with zero tuning
@@ -24,6 +24,29 @@ The corrected rerun includes the LeRobot v3.0 loader fix released in 0.5.3.
 | svla_so101_pickplace | real SO-100 | 50 | 5 / 45 / 0 | 260 (50 eps) | 86.7% |
 | xarm_lift_medium | real xArm | 800 | **767** / 33 / 0 | 6 (5 eps) | **20.8%** |
 | xarm_push_medium | real xArm | 800 | 238 / 562 / 0 | 845 (500 eps) | 83.3% |
+
+Rerun note (2026-08-31, v0.5.4): the pusht row above was re-audited during
+the blind test; the full 206-episode audit runs in **~2 seconds**. Verdicts
+matched the 0.5.3 record (43/163/0 baseline on the untouched copy).
+
+## Blind test (2026-08-31, v0.5.4)
+
+Observation rows above have no ground truth. The blind test does: 5 defect
+classes × 10 episodes injected into `lerobot/pusht` (seed=42), 156 episodes
+left as controls, default thresholds, zero tuning.
+
+| Class (10 eps each) | Caught strict (EXCLUDE) | Caught broad (+REVIEW) | Detector |
+|---|---:|---:|---|
+| empty episode (stale meta) | 10/10 | 10/10 | `_zero_frame_guard` (v0.4.12 P0 fix — regression confirmed on real data) |
+| NaN in state (300 cells/class) | 10/10 | 10/10 | `invalid_values` |
+| reversed timestamps (692 neg. deltas) | 10/10 | 10/10 | `timestamp_validity` |
+| frozen episode (motion = 0%) | 0/10 | 10/10 | `idle_ratio` → REVIEW (RISK_SIGNAL by design) |
+| duplicate frames (tail-placed) | 10/10 | 10/10 | `timestamp_validity` (2–4 neg. deltas/ep; placement artifact, disclosed) |
+
+**Strict confusion matrix: TP=40, FN=10, FP=0, TN=156 → precision 1.000,
+recall 0.800. Broad: recall 1.000. All 156 control verdicts identical to
+the clean baseline.** Full write-up with honest caveats:
+[blind_test_20260831.md](blind_test_20260831.md).
 
 Notes:
 
