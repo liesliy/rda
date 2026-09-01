@@ -50,6 +50,8 @@ rda ui
 
 **盲测**——我们往 `lerobot/pusht` 里注入了 50 个缺陷集（5 类缺陷，seed=42），另留 156 集作对照。宽口径下 50 个全部命中，严格口径下 precision **1.000**（对照组零误伤）。**[查看盲测报告 →](https://liesliy.github.io/rda/examples/rda_report_pusht.html)**
 
+**AgiBotWorld2026 实测**——对智元第三期数据集的第三方审计：仿真 5 个任务全量 + 1 个真机 RL 包，共 1,112 集；4,448 项完整性检查 0 失败；RDA 动作跳变信号与官方「人工接管」标记交叉验证，接管边界处 **3.1 倍富集**。零适配直接跑通。**[查看案例报告 →](docs/examples/agibotworld2026.md)**
+
 每次审计都可以渲染成可分享的单文件 HTML 报告和 README 徽章：
 
 ```bash
