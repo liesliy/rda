@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RDA audit · RDA audit · AgiBotWorld2026 · real-robot RL (HG-DAgger, task_12192)</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { font: 15px/1.55 -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+       color: #1f2328; margin: 0; background: #f6f8fa; }
+.wrap { max-width: 960px; margin: 24px auto 48px; padding: 0 16px; }
+header { background: #1f2328; color: #fff; border-radius: 10px; padding: 22px 26px; margin-bottom: 18px; }
+header h1 { margin: 0 0 4px; font-size: 21px; }
+header .sub { color: #9ea7b3; font-size: 13px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.card { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; padding: 14px 16px; }
+.card .num { font-size: 26px; font-weight: 700; }
+.card .lbl { font-size: 12px; color: #656d76; }
+section { background: #fff; border: 1px solid #d0d7de; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; }
+h2 { font-size: 15px; margin: 0 0 12px; color: #57606a; text-transform: uppercase; letter-spacing: .4px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eaeef2; }
+th { color: #656d76; font-weight: 600; font-size: 12.5px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 5px 0 12px; }
+.legend { font-size: 12.5px; color: #57606a; margin-top: 6px; }
+.legend .dot { margin-left: 0; }
+code { background: #f6f8fa; border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+.foot { color: #8b949e; font-size: 12px; margin-top: 14px; }
+ul { margin: 6px 0; padding-left: 20px; }
+.big { display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
+.big .v { font-size: 30px; font-weight: 700; }
+</style>
+</head>
+<body><div class="wrap">
+
+<header>
+  <h1>RDA audit · AgiBotWorld2026 · real-robot RL (HG-DAgger, task_12192)</h1>
+  <div class="sub">Independent quality audit · RDA v0.5.5 · LeRobot format · 10 episodes · 23658 frames · modalities: images.head_depth, images.head_right_fisheye, images.head_left_fisheye, images.top_head, images.hand_right, images.hand_left, images.head_back_fisheye, state</div>
+</header>
+
+<div class="cards">
+  <div class="card"><div class="num" style="color:#2da44e">0</div><div class="lbl">PASS — clean</div></div>
+  <div class="card"><div class="num" style="color:#bf8700">10</div><div class="lbl">REVIEW — worth a human look</div></div>
+  <div class="card"><div class="num" style="color:#cf222e">0</div><div class="lbl">EXCLUDE — integrity failure</div></div>
+  <div class="card"><div class="num">0%</div><div class="lbl">PASS rate</div></div>
+</div>
+
+<section>
+  <h2>Per-episode verdict strip</h2>
+  <svg width="100%" height="18" viewBox="0 0 36 14" preserveAspectRatio="none" style="max-width:36px"><rect x="0.0" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 0 · REVIEW</title></rect><rect x="3.6" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 1 · REVIEW</title></rect><rect x="7.2" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 2 · REVIEW</title></rect><rect x="10.8" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 3 · REVIEW</title></rect><rect x="14.4" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 4 · REVIEW</title></rect><rect x="18.0" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 5 · REVIEW</title></rect><rect x="21.6" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 6 · REVIEW</title></rect><rect x="25.2" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 7 · REVIEW</title></rect><rect x="28.8" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 8 · REVIEW</title></rect><rect x="32.4" y="0" width="3.0" height="14" rx="1" fill="#bf8700"><title>ep 9 · REVIEW</title></rect></svg><div class="legend"><span class="dot" style="background:#2da44e"></span>PASS 0<span class="dot" style="background:#bf8700"></span>REVIEW 10<span class="dot" style="background:#cf222e"></span>EXCLUDE 0</div>
+</section>
+
+<section>
+  <h2>Metric pass rates (three layers, default thresholds, zero per-dataset tuning)</h2>
+  <table>
+    <tr><th>Layer</th><th>Metric</th><th>Episodes measured</th><th>Pass rate</th></tr>
+    <tr><td>Layer 1 · Integrity</td><td>missing/dropout</td><td>10</td><td style="color:#2da44e;font-weight:600">100%</td></tr><tr><td>Layer 1 · Integrity</td><td>NaN/Inf</td><td>10</td><td style="color:#2da44e;font-weight:600">100%</td></tr><tr><td>Layer 1 · Integrity</td><td>schema</td><td>10</td><td style="color:#2da44e;font-weight:600">100%</td></tr><tr><td>Layer 1 · Integrity</td><td>timestamps</td><td>10</td><td style="color:#2da44e;font-weight:600">100%</td></tr><tr><td>Layer 1 · Integrity</td><td>joint limits</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 2 · Temporal & Motion</td><td>timestamps</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 2 · Temporal & Motion</td><td>sensor sync</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 2 · Temporal & Motion</td><td>velocity/acc</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 2 · Temporal & Motion</td><td>action spikes</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 2 · Temporal & Motion</td><td>sufficiency</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 3 · Dataset Utility</td><td>idle ratio</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 3 · Dataset Utility</td><td>coverage</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr><tr><td>Layer 3 · Dataset Utility</td><td>distribution</td><td>0</td><td style="color:#8b949e;font-weight:600">n/a</td></tr>
+  </table>
+</section>
+
+<section><h2>Top observations</h2><table><tr><th>Metric</th><th>Finding</th><th>Evidence</th></tr><tr><td><code>action_discontinuity</code></td><td>Observed action discontinuity: 1712 spike(s) across 10 episode(s) (100%); statistical risk signal, not confirmed corruption</td><td>RISK_SIGNAL</td></tr><tr><td><code>idle_ratio</code></td><td>Observed low effective motion: median 30.0% effective motion (70.0% idle); statistical risk signal</td><td>RISK_SIGNAL</td></tr><tr><td><code>velocity_acceleration</code></td><td>Observed extreme acceleration spikes: 164 across 10 episode(s); statistical risk signal</td><td>RISK_SIGNAL</td></tr><tr><td><code>sensor_synchronization</code></td><td>Sensor sync: N/A (no per-stream timestamps in any episode)</td><td>UNVERIFIABLE</td></tr></table></section>
+
+<section><h2>Hero metrics</h2><ul><li><b>Action spikes</b>: 1712 across 10 eps</li><li><b>State occupancy</b>: median 0.087 (low)</li><li><b>Sensor sync</b>: n/a on this dataset</li></ul></section>
+
+<section>
+  <h2>Episode lists</h2>
+  <p><b>REVIEW (10)</b>: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9</p>
+  <p><b>EXCLUDE (0)</b>: —</p>
+  <p style="color:#656d76;font-size:13px">REVIEW is a statistical signal worth human inspection before training — not a verdict of "bad data". EXCLUDE means an integrity-layer hard failure or unreadable episode.</p>
+</section>
+
+<div class="foot">Generated from <code>D:/workbuddy-data/reports/agibot_2026/rda_audit_rl_hgdagger_realrobot.json</code> · RDA audit runs fully offline on LeRobot v2.1/v3.0 datasets · <code>pip install robot-data-audit</code> to reproduce · GitHub: github.com/liesliy/rda</div>
+
+</div></body>
+</html>
