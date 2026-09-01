@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Downloads](https://static.pepy.tech/badge/robot-data-audit)](https://pepy.tech/project/robot-data-audit)
 [![Tests](https://github.com/liesliy/rda/actions/workflows/ci.yml/badge.svg)](https://github.com/liesliy/rda/actions/workflows/ci.yml)
-[![audit: lerobot/pusht](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_pusht.svg)](https://liesliy.github.io/rda/examples/rda_report_pusht.html)
-[![audit: AgiBotWorld2026 RL](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_agibot_rl.svg)](https://liesliy.github.io/rda/examples/rda_report_agibot_rl_hgdagger.html)
+
+[![audit: lerobot/pusht](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_pusht.svg)](https://liesliy.github.io/rda/examples/rda_report_pusht.html) [![audit: AgiBotWorld2026 RL](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_agibot_rl.svg)](https://liesliy.github.io/rda/examples/rda_report_agibot_rl_hgdagger.html)
 
 > **机器人数据的独立质量评估。** 本地运行——数据不出你的机器。
 >
