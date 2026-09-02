@@ -56,6 +56,11 @@ def _describe_sensor_sync(dataset_metrics: Dict[str, Any], total: int) -> str:
 def _describe_action_disc(dataset_metrics: Dict[str, Any], total: int) -> str:
     temporal = dataset_metrics.get("temporal_motion", {})
     disc = temporal.get("action_discontinuity", {})
+    if disc.get("available_episodes", 0) == 0:
+        return (
+            "Action discontinuity: N/A (no action arrays in any episode — "
+            "video-only dataset)"
+        )
     total_spikes = disc.get("total_spikes", 0)
     affected = disc.get("episodes_with_spikes", 0)
     ratio = affected / total if total > 0 else 0.0
@@ -69,9 +74,18 @@ def _describe_action_disc(dataset_metrics: Dict[str, Any], total: int) -> str:
 def _describe_coverage(dataset_metrics: Dict[str, Any], total: int) -> str:
     utility = dataset_metrics.get("dataset_utility", {})
     cov = utility.get("coverage", {})
+    if cov.get("available_episodes", 0) == 0:
+        return (
+            "State-space occupancy: N/A (no observation.state in any "
+            "episode — video-only dataset)"
+        )
     occ = cov.get("state_space_occupancy", {})
     median = occ.get("median", 0.0)
-    return f"State-space occupancy: median = {median:.1%} across episodes"
+    available = cov.get("available_episodes", 0)
+    return (
+        f"State-space occupancy: median = {median:.1%} across episodes "
+        f"({available}/{total} episodes)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +175,20 @@ def compute_top_observations(
     disc = temporal.get("action_discontinuity", {})
     disc_spikes = disc.get("total_spikes", 0)
     disc_affected = disc.get("episodes_with_spikes", 0)
-    if disc_spikes > 0:
+    disc_available = disc.get("available_episodes", 0)
+    if disc_available == 0:
+        observations.append({
+            "metric": "action_discontinuity",
+            "description": _describe_action_disc(dataset_metrics, total_episodes),
+            "significance": "info",
+            "evidence_level": "UNVERIFIABLE",
+            "layer": "temporal_motion",
+            "affected_episodes": 0,
+            "affected_ratio": 0.0,
+            "na_episodes": disc.get("na_episodes", total_episodes),
+            "hero": True,
+        })
+    elif disc_spikes > 0:
         observations.append({
             "metric": "action_discontinuity",
             "description": _describe_action_disc(dataset_metrics, total_episodes),
@@ -204,10 +231,25 @@ def compute_top_observations(
     # Layer 3: Dataset Utility
     utility = dataset_metrics.get("dataset_utility", {})
 
-    # State-space occupancy
-    sso = utility.get("state_space_occupancy", {})
+    # State-space occupancy (aggregation key is "coverage"; the old
+    # "state_space_occupancy" lookup never matched and silently hid
+    # this observation)
+    sso = utility.get("coverage", {})
     occ = sso.get("state_space_occupancy", {})
-    if occ:
+    occ_available = sso.get("available_episodes", 0)
+    if occ_available == 0:
+        observations.append({
+            "metric": "state_space_occupancy",
+            "description": _describe_coverage(dataset_metrics, total_episodes),
+            "significance": "info",
+            "evidence_level": "UNVERIFIABLE",
+            "layer": "dataset_utility",
+            "affected_episodes": 0,
+            "affected_ratio": 0.0,
+            "na_episodes": sso.get("na_episodes", total_episodes),
+            "hero": True,
+        })
+    elif occ:
         median_occ = occ.get("median", 0.0)
         observations.append({
             "metric": "state_space_occupancy",
@@ -215,8 +257,8 @@ def compute_top_observations(
             "significance": "medium" if median_occ < 0.1 else "low",
             "evidence_level": "RISK_SIGNAL",
             "layer": "dataset_utility",
-            "affected_episodes": sso.get("available_episodes", 0),
-            "affected_ratio": sso.get("available_episodes", 0) / total_episodes,
+            "affected_episodes": occ_available,
+            "affected_ratio": occ_available / total_episodes,
             "hero": True,
         })
 
@@ -290,17 +332,23 @@ def compute_hero_metrics(dataset_metrics: Dict[str, Any]) -> Dict[str, Any]:
             sync_interp = "severe"
         sync_p95 = p95_data
 
-    # Action discontinuity
+    # Action discontinuity — handle N/A (no action arrays)
     disc = temporal.get("action_discontinuity", {})
+    disc_available = disc.get("available_episodes", 0)
+    disc_na = disc.get("na_episodes", 0)
 
-    # State-space occupancy
+    # State-space occupancy — handle N/A (no observation.state)
     cov = utility.get("coverage", {})
     occ = cov.get("state_space_occupancy", {})
+    occ_available = cov.get("available_episodes", 0)
+    occ_na = cov.get("na_episodes", 0)
     median_cov = occ.get("median", 0.0)
     min_cov = occ.get("p5", 0.0)  # Use p5 as proxy for min
     max_cov = occ.get("p95", 0.0)  # Use p95 as proxy for max
 
-    if median_cov > 0.5:
+    if occ_available == 0:
+        cov_interp = "na"
+    elif median_cov > 0.5:
         cov_interp = "good"
     elif median_cov > 0.2:
         cov_interp = "moderate"
@@ -319,6 +367,9 @@ def compute_hero_metrics(dataset_metrics: Dict[str, Any]) -> Dict[str, Any]:
         "action_discontinuity": {
             "total_spikes": disc.get("total_spikes", 0),
             "affected_episodes": disc.get("episodes_with_spikes", 0),
+            "interpretation": "na" if disc_available == 0 else "measured",
+            "available_episodes": disc_available,
+            "na_episodes": disc_na if disc_available == 0 else 0,
         },
         "state_space_occupancy": {
             "median_occupancy": float(median_cov),
@@ -326,5 +377,7 @@ def compute_hero_metrics(dataset_metrics: Dict[str, Any]) -> Dict[str, Any]:
             "max_occupancy": float(max_cov),
             "range": [float(min_cov), float(max_cov)],
             "interpretation": cov_interp,
+            "available_episodes": occ_available,
+            "na_episodes": occ_na if occ_available == 0 else 0,
         },
     }

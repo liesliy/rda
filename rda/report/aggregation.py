@@ -67,6 +67,7 @@ def _aggregate_integrity(result: DatasetAuditResult) -> Dict[str, Any]:
     integrity_metrics = [
         "missing_dropout", "invalid_values", "schema_consistency",
         "timestamp_validity", "joint_limit",
+        "video_frame_integrity",
     ]
     out: Dict[str, Any] = {}
     total = result.num_episodes
@@ -154,6 +155,16 @@ def _aggregate_temporal_motion(result: DatasetAuditResult) -> Dict[str, Any]:
             "spike_count_distribution": _percentile_dict(spike_counts, (50.0, 95.0, 99.0)),
             "available_episodes": int(spike_counts.size),
         }
+    else:
+        # All episodes were N/A (e.g. no action arrays in a video-only
+        # dataset). Write an explicit aggregate so downstream hero/report
+        # layers can distinguish "0 spikes" from "cannot measure".
+        out["action_discontinuity"] = {
+            "total_spikes": 0,
+            "episodes_with_spikes": 0,
+            "available_episodes": 0,
+            "na_episodes": result.num_episodes,
+        }
 
     # temporal_sufficiency: idle structure and valid window ratios
     ts_fields = [
@@ -203,6 +214,15 @@ def _aggregate_dataset_utility(result: DatasetAuditResult) -> Dict[str, Any]:
         out["coverage"] = {
             "state_space_occupancy": _percentile_dict(occupancies, (5.0, 50.0, 95.0)),
             "available_episodes": int(occupancies.size),
+        }
+    else:
+        # All episodes were N/A (e.g. no observation.state in a video-only
+        # dataset). Explicit aggregate prevents hero layers from reporting
+        # a misleading 0.0% occupancy.
+        out["coverage"] = {
+            "state_space_occupancy": {"p5": 0.0, "median": 0.0, "p95": 0.0},
+            "available_episodes": 0,
+            "na_episodes": result.num_episodes,
         }
 
     # distribution: trajectory duration and path length
@@ -337,7 +357,7 @@ def _legacy_distribution(result: DatasetAuditResult) -> Dict[str, Any]:
     coverages: List[float] = []
 
     for ep in result.episodes.values():
-        m = ep.metrics.get("state_space_occupancy")
+        m = ep.metrics.get("coverage")
         if m is not None and m.availability == MetricAvailability.AVAILABLE:
             grid = m.details.get("grid", {})
             cov = grid.get("occupancy_rate")

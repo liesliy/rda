@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import numpy as np
 
@@ -185,6 +185,8 @@ def _extract_episode_from_dataframe(
             d = d.squeeze(-1)
         done = d
 
+    meta = {"source": "lerobot", "format_version": format_version}
+
     return EpisodeData(
         episode_index=ep_index,
         num_frames=num_frames,
@@ -193,30 +195,39 @@ def _extract_episode_from_dataframe(
         action=action,
         reward=reward,
         done=done,
-        meta={"source": "lerobot", "format_version": format_version},
+        meta=meta,
     )
 
 
 def _try_lerobot_import():
     """Try importing LeRobotDataset with compatibility for old/new paths.
 
-    Returns the LeRobotDataset class or None if not available.
+    Returns a tuple ``(dataset_class_or_None, reason)``:
+
+    - Success:            ``(cls, None)``
+    - Not installed:      ``(None, "not_installed")``
+    - Installed but its import fails (e.g. the optional ``datasets``
+      dependency is missing): ``(None, <the ImportError message>)``
+
+    The reason lets callers distinguish "lerobot is not installed" from
+    "lerobot is installed but broken" — previously both surfaced as the
+    misleading "lerobot package is not installed" hint.
     """
-    # Try lerobot >= 0.6.0 path first
-    try:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset  # type: ignore
-        return LeRobotDataset
-    except ImportError:
-        pass
+    last_error: Optional[ImportError] = None
+    for module_path in ("lerobot.datasets.lerobot_dataset", "lerobot"):
+        try:
+            import importlib
 
-    # Fallback to lerobot < 0.6.0 path
-    try:
-        from lerobot import LeRobotDataset  # type: ignore
-        return LeRobotDataset
-    except ImportError:
-        pass
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, "LeRobotDataset", None)
+            if cls is not None:
+                return cls, None
+        except ImportError as e:
+            last_error = e
 
-    return None
+    if last_error is not None:
+        return None, str(last_error)
+    return None, "not_installed"
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +379,36 @@ def _read_episode_parquet_v30(
             df = _read_v30_fallback_file(str(actual_path))
             ep_df = df[df["episode_index"] == ep_index].reset_index(drop=True)
 
-    return _extract_episode_from_dataframe(ep_df, ep_index, fps, "v3.0")
+    episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, "v3.0")
+    episode.meta["dataset_root"] = str(dataset_path)
+
+    # Video feature references live in the EPISODE METADATA parquet
+    # (columns like ``videos/<feature>/chunk_index``), not in the data
+    # parquet. Pass them through so video_frame_integrity can locate
+    # and cross-check the actual MP4 files.
+    video_features: Dict[str, Dict[str, Any]] = {}
+    for key, value in ep_meta_row.items():
+        if not key.startswith("videos/"):
+            continue
+        parts = key.split("/")
+        if len(parts) != 3:
+            continue
+        feature, suffix = parts[1], parts[2]
+        entry = video_features.setdefault(feature, {})
+        try:
+            entry[suffix] = int(value)
+        except (TypeError, ValueError):
+            entry[suffix] = value
+    if video_features:
+        episode.meta["video_features"] = video_features
+        length = ep_meta_row.get("length")
+        if length is not None:
+            try:
+                episode.meta["episode_meta_length"] = int(length)
+            except (TypeError, ValueError):
+                pass
+
+    return episode
 
 
 # Backwards-compatible alias
@@ -502,6 +542,84 @@ def _read_episode_parquet_v21(
 # ---------------------------------------------------------------------------
 
 
+def _is_lerobot_dataset_root(dataset_path: Path) -> bool:
+    """Return True if *dataset_path* looks like a LeRobot dataset root.
+
+    A directory counts as a dataset root when ``meta/info.json`` exists
+    (the canonical marker for both v2.1 and v3.0 layouts).
+    """
+    return dataset_path.is_dir() and (dataset_path / "meta" / "info.json").exists()
+
+
+def discover_lerobot_roots(path: str) -> List[Path]:
+    """Discover LeRobot dataset root(s) under *path*.
+
+    Handles three layouts:
+
+    1. **Direct root** — *path* itself contains ``meta/info.json``:
+       returns ``[path]``.
+    2. **Task-directory layout** (e.g. EgoSuite / EgoDemo-Open100K) —
+       *path* is a task directory whose children are per-episode UUID
+       directories, each of which is itself a complete LeRobot v3.0
+       dataset root.  Returns all discovered roots sorted by name.
+    3. **No dataset found** — returns an empty list.
+
+    This removes the need to manually "flatten" an episode UUID
+    directory before auditing (the 0.5.5 workflow required a copy step
+    and produced confusing HF-repo-id 401 errors when skipped).
+    """
+    root = Path(path)
+    if _is_lerobot_dataset_root(root):
+        return [root]
+
+    candidates: List[Path] = []
+    if root.is_dir():
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and _is_lerobot_dataset_root(child):
+                candidates.append(child)
+    return candidates
+
+
+def _resolve_single_root(path: str) -> Path:
+    """Resolve *path* to exactly one LeRobot dataset root.
+
+    Raises a descriptive ``FileNotFoundError`` when no dataset root can
+    be located (instead of the misleading "treated as HF repo id" 401
+    error the old path produced).
+    """
+    roots = discover_lerobot_roots(path)
+    if not roots:
+        raise FileNotFoundError(
+            f"No LeRobot dataset found at '{path}'. Expected a directory "
+            "containing meta/info.json, or a task directory whose "
+            "subdirectories are per-episode LeRobot dataset roots "
+            "(e.g. EgoSuite episode-UUID layout)."
+        )
+    if len(roots) > 1:
+        # Multi-root task directory: auditors should iterate roots.
+        # For the single-root API, use the first one but tell the user.
+        import warnings
+
+        warnings.warn(
+            f"Found {len(roots)} episode dataset roots under '{path}'. "
+            f"Loading the first one ('{roots[0].name}') only. "
+            "Use iter_lerobot_task_datasets() to iterate all of them.",
+            UserWarning,
+            stacklevel=3,
+        )
+    return roots[0]
+
+
+def iter_lerobot_task_datasets(path: str) -> Iterator[str]:
+    """Yield loadable dataset root paths under *path*.
+
+    Convenience for auditing every episode directory inside a task
+    directory (EgoSuite layout) one at a time.
+    """
+    for root in discover_lerobot_roots(path):
+        yield str(root)
+
+
 def load_lerobot_dataset(path: str) -> DatasetInfo:
     """Load a LeRobot dataset and return dataset-level metadata.
 
@@ -525,7 +643,7 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
         including ``modalities`` and ``action_keys`` derived from a
         sample episode.
     """
-    dataset_path = Path(path)
+    dataset_path = Path(_resolve_single_root(path))
 
     # --- Try direct parquet reading first (fastest, no lerobot needed) ---
     if dataset_path.is_dir() and (dataset_path / "meta" / "info.json").exists():
@@ -575,12 +693,19 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
         )
 
     # --- Fallback: try the lerobot Python package ---
-    LRD = _try_lerobot_import()
+    LRD, import_reason = _try_lerobot_import()
     if LRD is None:
+        if import_reason == "not_installed":
+            raise ImportError(
+                "Cannot load LeRobot dataset: direct parquet reading failed and "
+                "the 'lerobot' package is not installed. "
+                "Install it with: pip install lerobot"
+            )
         raise ImportError(
-            "Cannot load LeRobot dataset: direct parquet reading failed and "
-            "the 'lerobot' package is not installed. "
-            "Install it with: pip install lerobot"
+            "Cannot load LeRobot dataset: the 'lerobot' package is installed "
+            f"but failed to import ({import_reason}). This usually means an "
+            "optional dependency is missing — for lerobot >= 0.6 install the "
+            "dataset extra with: pip install 'lerobot[dataset]'"
         )
 
     # lerobot 0.6.0+ uses root= kwarg for local paths
@@ -642,7 +767,7 @@ def iter_episodes(
         :class:`EpisodeData` for each episode in the dataset, in index
         order.
     """
-    dataset_path = Path(path)
+    dataset_path = Path(_resolve_single_root(path))
 
     # --- Try direct parquet reading first ---
     if dataset_path.is_dir() and (dataset_path / "meta" / "info.json").exists():
@@ -691,12 +816,19 @@ def iter_episodes(
             return
 
     # --- Fallback: try the lerobot Python package ---
-    LRD = _try_lerobot_import()
+    LRD, import_reason = _try_lerobot_import()
     if LRD is None:
+        if import_reason == "not_installed":
+            raise ImportError(
+                "Cannot load LeRobot dataset: direct parquet reading failed and "
+                "the 'lerobot' package is not installed. "
+                "Install it with: pip install lerobot"
+            )
         raise ImportError(
-            "Cannot load LeRobot dataset: direct parquet reading failed and "
-            "the 'lerobot' package is not installed. "
-            "Install it with: pip install lerobot"
+            "Cannot load LeRobot dataset: the 'lerobot' package is installed "
+            f"but failed to import ({import_reason}). This usually means an "
+            "optional dependency is missing — for lerobot >= 0.6 install the "
+            "dataset extra with: pip install 'lerobot[dataset]'"
         )
 
     try:

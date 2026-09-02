@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot-data-audit"
-version = "0.5.5"
+version = "0.5.6"
 description = "Robot Data Audit (RDA) - Quality auditing tool for robot datasets"
 readme = "README.md"
 license = {file = "LICENSE"}

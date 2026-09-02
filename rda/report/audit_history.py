@@ -149,6 +149,7 @@ def _build_hero_metrics_summary(
     disc = hero.get("action_discontinuity", {})
     summary["action_disc_total_spikes"] = disc.get("total_spikes", 0)
     summary["action_disc_affected_episodes"] = disc.get("affected_episodes", 0)
+    summary["action_disc_interpretation"] = disc.get("interpretation", "measured")
 
     cov = hero.get("state_space_occupancy", {})
     summary["state_space_median_occupancy"] = cov.get("median_occupancy", 0.0)

@@ -40,6 +40,7 @@ from rda.metrics.motion import (
     IdleRatioMetric,
 )
 from rda.metrics.distribution import DistributionMetric, CoverageMetric
+from rda.metrics.video_integrity import VideoFrameIntegrityMetric
 
 # ---------------------------------------------------------------------------
 # Architectural Layer classification (how the metric works)
@@ -51,6 +52,7 @@ LAYER1_INTEGRITY: List[Type[MetricBase]] = [
     SchemaShapeMetric,
     TimestampValidityMetric,
     JointLimitMetric,
+    VideoFrameIntegrityMetric,
 ]
 """Layer 1 — Data Integrity: deterministic hard checks (pass/exclude)."""
 
@@ -131,6 +133,7 @@ __all__ = [
     "SchemaShapeMetric",
     "TimestampValidityMetric",
     "JointLimitMetric",
+    "VideoFrameIntegrityMetric",
     # Metric classes — Layer 2 (Temporal & Motion)
     "SensorSyncMetric",
     "JitterMetric",

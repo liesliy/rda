@@ -187,12 +187,17 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     # Action discontinuity
     disc = temporal.get("action_discontinuity", {})
     if disc:
-        total_spikes = disc.get("total_spikes", 0)
-        affected = disc.get("episodes_with_spikes", 0)
-        lines.append(
-            f"  action_discontinuity      {total_spikes} spikes in {affected} episodes "
-            "(RISK_SIGNAL: observational, not confirmed corruption)"
-        )
+        if disc.get("available_episodes", 0) == 0:
+            lines.append(
+                "  action_discontinuity      N/A (no action arrays — video-only dataset)"
+            )
+        else:
+            total_spikes = disc.get("total_spikes", 0)
+            affected = disc.get("episodes_with_spikes", 0)
+            lines.append(
+                f"  action_discontinuity      {total_spikes} spikes in {affected} episodes "
+                "(RISK_SIGNAL: observational, not confirmed corruption)"
+            )
 
     # Velocity
     vel = temporal.get("velocity_acceleration", {})
@@ -226,12 +231,17 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     lines.append("  ── Layer 3: Dataset Utility ──")
     utility = dataset_metrics.get("dataset_utility", {})
 
-    # State-space occupancy
-    sso = utility.get("state_space_occupancy", {})
+    # State-space occupancy (aggregation key is "coverage")
+    sso = utility.get("coverage", {})
     if sso:
-        occ = sso.get("state_space_occupancy", {})
-        median_occ = occ.get("median", 0.0)
-        lines.append(f"  state_space_occupancy     median = {median_occ:.1%}")
+        if sso.get("available_episodes", 0) == 0:
+            lines.append(
+                "  state_space_occupancy     N/A (no observation.state — video-only dataset)"
+            )
+        else:
+            occ = sso.get("state_space_occupancy", {})
+            median_occ = occ.get("median", 0.0)
+            lines.append(f"  state_space_occupancy     median = {median_occ:.1%}")
 
     # Idle ratio / effective motion
     idle = utility.get("idle_ratio", {})
@@ -285,20 +295,30 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
 
     # Action disc hero
     disc_hero = hero_metrics.get("action_discontinuity", {})
-    lines.append(
-        f"  ★ Action Discontinuity: "
-        f"{disc_hero.get('total_spikes', 0)} spikes total, "
-        f"{disc_hero.get('affected_episodes', 0)} episodes affected"
-    )
+    if disc_hero.get("interpretation") == "na":
+        lines.append(
+            "  ★ Action Discontinuity: N/A (no action arrays — video-only dataset)"
+        )
+    else:
+        lines.append(
+            f"  ★ Action Discontinuity: "
+            f"{disc_hero.get('total_spikes', 0)} spikes total, "
+            f"{disc_hero.get('affected_episodes', 0)} episodes affected"
+        )
 
     # State-space occupancy hero
     sso_hero = hero_metrics.get("state_space_occupancy", {})
-    sso_range = sso_hero.get("range", [0, 0])
-    lines.append(
-        f"  ★ State Space Occupancy: "
-        f"median {sso_hero.get('median_occupancy', 0):.1%}, "
-        f"range [{sso_range[0]:.1%}, {sso_range[1]:.1%}]"
-    )
+    if sso_hero.get("interpretation") == "na":
+        lines.append(
+            "  ★ State Space Occupancy: N/A (no observation.state — video-only dataset)"
+        )
+    else:
+        sso_range = sso_hero.get("range", [0, 0])
+        lines.append(
+            f"  ★ State Space Occupancy: "
+            f"median {sso_hero.get('median_occupancy', 0):.1%}, "
+            f"range [{sso_range[0]:.1%}, {sso_range[1]:.1%}]"
+        )
     lines.append("")
 
     # --- EXCLUDE Episodes ---
