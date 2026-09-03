@@ -49,6 +49,8 @@ rda ui
 
 **12 local datasets, 4,959 episodes, one set of default thresholds, zero per-dataset tuning** — full table in [docs/benchmark.md](docs/benchmark.md).
 
+**Full audit of lerobot/libero_10 (v3.0)** — 379 episodes, 101,469 frames: all 12 applicable integrity checks clean, 0 hard defects; the one REVIEW signal (low-motion heuristic) is discussed honestly. **[Read the report →](docs/benchmark_libero10.md)**
+
 **Blind test** — we injected 50 defective episodes (5 defect classes, seed=42) into `lerobot/pusht` and kept 156 as controls. RDA caught all 50 under the broad criterion, precision **1.000** (zero false alarms on controls) under the strict one. **[Read the blind-test report →](https://liesliy.github.io/rda/examples/rda_report_pusht.html)**
 
 **Validated on AgiBotWorld2026** — third-party audit of AgiBot's Phase 3 dataset: all 5 simulation tasks + a real-robot RL package, 1,112 episodes, 4,448 integrity checks with 0 failures, and a **3.1× enrichment** of RDA's discontinuity spikes at official human-takeover boundaries. Zero adaptation needed. **[Read the case study →](docs/examples/agibotworld2026.md)**

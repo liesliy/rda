@@ -49,6 +49,8 @@ rda ui
 
 **12 个本地数据集、4,959 集、同一套默认阈值、零调参**——完整表格见 [docs/benchmark.md](docs/benchmark.md)。
 
+**lerobot/libero_10（v3.0）全量审计**——379 集、101,469 帧：12 项适用的完整性检查全部通过、0 个硬伤；唯一的 REVIEW 信号（低运动启发式）我们做了诚实的讨论。**[查看报告 →](docs/benchmark_libero10.md)**
+
 **盲测**——我们往 `lerobot/pusht` 里注入了 50 个缺陷集（5 类缺陷，seed=42），另留 156 集作对照。宽口径下 50 个全部命中，严格口径下 precision **1.000**（对照组零误伤）。**[查看盲测报告 →](https://liesliy.github.io/rda/examples/rda_report_pusht.html)**
 
 **AgiBotWorld2026 实测**——对智元第三期数据集的第三方审计：仿真 5 个任务全量 + 1 个真机 RL 包，共 1,112 集；4,448 项完整性检查 0 失败；RDA 动作跳变信号与官方「人工接管」标记交叉验证，接管边界处 **3.1 倍富集**。零适配直接跑通。**[查看案例报告 →](docs/examples/agibotworld2026.md)**
