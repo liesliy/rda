@@ -67,6 +67,8 @@ class EpisodeAuditResult:
     num_frames: int
     metrics: Dict[str, MetricResult] = field(default_factory=dict)
     verdict: AuditVerdict = AuditVerdict.PASS
+    task_index: Optional[int] = None
+    task_description: Optional[str] = None
     deviation_score: Optional[float] = None
     deviation_method: Optional[str] = None
     portable_score: Optional[float] = None
@@ -227,6 +229,8 @@ class EpisodeAuditor:
             num_frames=episode.num_frames,
             metrics=metric_results,
             verdict=verdict,
+            task_index=(episode.meta or {}).get("task_index"),
+            task_description=(episode.meta or {}).get("task_description"),
             deviation_score=deviation_score,
             deviation_method=deviation_method,
             portable_score=portable_score,

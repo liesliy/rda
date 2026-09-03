@@ -471,12 +471,22 @@ def _read_episode_parquet_v30(
             continue
         feature, suffix = parts[1], parts[2]
         entry = video_features.setdefault(feature, {})
-        try:
-            entry[suffix] = int(value)
-        except (TypeError, ValueError):
-            entry[suffix] = value
+        if suffix in ("from_timestamp", "to_timestamp"):
+            # Frame-span timestamps (seconds) — keep as float so
+            # video_frame_integrity can derive this episode's frame count
+            # inside a shared chunked MP4 via (to - from) * fps.
+            try:
+                entry[suffix] = float(value)
+            except (TypeError, ValueError):
+                entry[suffix] = value
+        else:
+            try:
+                entry[suffix] = int(value)
+            except (TypeError, ValueError):
+                entry[suffix] = value
     if video_features:
         episode.meta["video_features"] = video_features
+        episode.meta["fps"] = fps
         length = ep_meta_row.get("length")
         if length is not None:
             try:

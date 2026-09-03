@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.8 - 2026-09-03
+
+### Fixed
+
+- `video_frame_integrity` false-flagged every episode of a chunked v3.0 dataset: it compared a shared MP4's *total* frame count against a single episode's parquet count (e.g. 101469 vs 214), producing a 100% hard-mismatch on `lerobot/libero_10`. The metric now derives each episode's own frame span inside the chunk via `(to_timestamp - from_timestamp) * fps` (timestamps are preserved as floats and `fps` is injected by the loader), and separately detects genuine file truncation (when the span runs past the end of the MP4).
+- Episode verdicts carried no task identity: `EpisodeAuditResult` now surfaces `task_index` and `task_description` (propagated from `EpisodeData.meta`), so per-episode results in reports answer "which task is this episode from?" — completing the report layer of the v3.0 task-identity fix started in 0.5.7.
+
+### Added
+
+- Regression coverage for chunked-video frame-count cross-check and file-truncation detection (`tests/test_video_frame_integrity.py`).
+- Regression coverage for episode-level task-identity propagation to the audit result (`tests/test_lerobot_task_identity.py`).
+
 ## 0.5.7 - 2026-09-03
 
 ### Fixed

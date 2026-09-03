@@ -61,6 +61,8 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
         "episode_index": ep_result.episode_index,
         "num_frames": ep_result.num_frames,
         "verdict": ep_result.verdict.value,
+        "task_index": getattr(ep_result, "task_index", None),
+        "task_description": getattr(ep_result, "task_description", None),
         "metrics": metrics_dict,
     }
 
@@ -568,6 +570,8 @@ def generate_episode_report(
 
     return {
         "episode_id": episode_index,
+        "task_index": getattr(ep_result, "task_index", None),
+        "task_description": getattr(ep_result, "task_description", None),
         "integrity_check": integrity_check,
         "behavior_verdict": behavior_verdict,
         "evidence_level": "HARD_FAIL" if not integrity_check["passed"] else (

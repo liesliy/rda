@@ -12,6 +12,7 @@ dataset with ``dtype: video`` features.
 """
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
@@ -124,6 +125,7 @@ class VideoFrameIntegrityMetric(MetricBase):
             )
 
         root = Path(dataset_root)
+        fps = meta.get("fps")
         checked: List[Dict[str, Any]] = []
         mismatched: List[Dict[str, Any]] = []
         unreadable: List[str] = []
@@ -152,17 +154,59 @@ class VideoFrameIntegrityMetric(MetricBase):
                 unreadable.append(feature)
                 continue
 
+            # Determine this episode's expected frame count *within* the
+            # (possibly shared) chunked MP4.
+            from_ts = info.get("from_timestamp")
+            to_ts = info.get("to_timestamp")
+            chunked = (
+                from_ts is not None
+                and to_ts is not None
+                and fps is not None
+                and math.isfinite(float(from_ts))
+                and math.isfinite(float(to_ts))
+            )
+
+            if chunked:
+                # Chunked video: multiple episodes share one MP4. The
+                # episode's own frame span is [from_ts, to_ts) seconds, so
+                # its expected frame count is (to - from) * fps — NOT the
+                # whole file's frame count (which, when compared directly,
+                # produced a false 100% "mismatch" on chunked datasets).
+                episode_video_frames = int(round((float(to_ts) - float(from_ts)) * float(fps)))
+                expected = episode_video_frames
+                end_frame = int(round(float(to_ts) * float(fps)))
+                file_truncated = video_frames < end_frame
+            else:
+                # Non-chunked (one episode = one video file): compare the
+                # whole file's frame count directly.
+                expected = video_frames
+                file_truncated = False
+
             entry: Dict[str, Any] = {
                 "feature": feature,
                 "video_path": str(video_path.relative_to(root)),
                 "video_frames": video_frames,
                 "parquet_frames": episode.num_frames,
-                "delta": video_frames - episode.num_frames,
+                "delta": expected - episode.num_frames,
             }
+            if chunked:
+                entry["chunked"] = True
+                entry["from_timestamp"] = from_ts
+                entry["to_timestamp"] = to_ts
+                entry["episode_video_frames"] = expected
+                entry["end_frame"] = end_frame
+                entry["file_truncated"] = file_truncated
             meta_length = meta.get("episode_meta_length")
             if meta_length is not None:
                 entry["episode_meta_length"] = meta_length
             checked.append(entry)
+
+            # A truncated shared MP4 is a hard structural failure.
+            if file_truncated:
+                entry["level"] = "hard"
+                entry["reason"] = "video_file_truncated"
+                mismatched.append(entry)
+                continue
 
             delta_ratio = abs(entry["delta"]) / max(episode.num_frames, 1)
             if delta_ratio > _HARD_TOLERANCE:
@@ -220,10 +264,21 @@ class VideoFrameIntegrityMetric(MetricBase):
         hard_count = sum(1 for m in mismatched if m["level"] == "hard")
         parts = []
         for m in mismatched:
-            parts.append(
-                f"{m['feature']}: video={m['video_frames']} vs "
-                f"parquet={m['parquet_frames']} (delta {m['delta']:+d})"
-            )
+            if m.get("chunked") and m.get("file_truncated"):
+                parts.append(
+                    f"{m['feature']}: file has {m['video_frames']} frames but "
+                    f"episode needs up to {m['end_frame']} (truncated)"
+                )
+            elif m.get("chunked"):
+                parts.append(
+                    f"{m['feature']}: video span={m.get('episode_video_frames')} vs "
+                    f"parquet={m['parquet_frames']} (delta {m['delta']:+d})"
+                )
+            else:
+                parts.append(
+                    f"{m['feature']}: video={m['video_frames']} vs "
+                    f"parquet={m['parquet_frames']} (delta {m['delta']:+d})"
+                )
         msg = (
             f"Video frame count mismatch in {len(mismatched)} feature(s): "
             + "; ".join(parts)

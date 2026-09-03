@@ -205,3 +205,50 @@ def test_libero10_end_to_end_task_identity():
         seen.add(ep.meta["task_index"])
 
     assert seen == set(range(10))
+
+
+def test_episode_audit_result_propagates_task_identity(tmp_path):
+    """The audit result must surface task_index/task_description from meta.
+
+    This pins the report-layer fix: episode verdicts previously carried no
+    task identity, so a report could not answer "which task did this
+    episode belong to?" even after the loader fix.
+    """
+    import numpy as np
+
+    from rda.audit.episode_audit import EpisodeAuditor
+    from rda.io.schema import EpisodeData
+
+    ep = EpisodeData(
+        episode_index=3,
+        num_frames=5,
+        timestamps=np.arange(5, dtype=float) / 10.0,
+        meta={
+            "task_index": 2,
+            "task_description": "pick up the red block",
+        },
+    )
+
+    result = EpisodeAuditor(metrics=[]).audit(ep)
+
+    assert result.task_index == 2
+    assert result.task_description == "pick up the red block"
+
+
+def test_episode_audit_result_task_identity_none_when_missing(tmp_path):
+    """Episodes without task identity must leave the fields as None."""
+    import numpy as np
+
+    from rda.audit.episode_audit import EpisodeAuditor
+    from rda.io.schema import EpisodeData
+
+    ep = EpisodeData(
+        episode_index=0,
+        num_frames=5,
+        timestamps=np.arange(5, dtype=float) / 10.0,
+    )
+
+    result = EpisodeAuditor(metrics=[]).audit(ep)
+
+    assert result.task_index is None
+    assert result.task_description is None

@@ -17,7 +17,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rda.metrics.video_integrity import _count_video_frames  # noqa: E402
+from rda.metrics.video_integrity import (  # noqa: E402
+    VideoFrameIntegrityMetric,
+    _count_video_frames,
+)
+from rda.io.schema import EpisodeData  # noqa: E402
 
 
 def _install_fake_av(monkeypatch, *, nb_frames, stream_frames, decode_count):
@@ -70,3 +74,82 @@ def test_decode_fallback_only_when_no_fast_source(tmp_path, monkeypatch):
     )
     assert _count_video_frames(tmp_path / "webm.mp4") == 777
     container.decode.assert_called_once()
+
+
+# --- Chunked video frame-count cross-check (v3.0 shared MP4) ---
+#
+# In LeRobot v3.0 a *single* MP4 stores many episodes back-to-back (a
+# "chunk"), so the file's total frame count is far larger than any one
+# episode's frame count. Before the fix, ``video_frame_integrity`` compared
+# the whole file's frame count against the episode's parquet count and
+# flagged every episode as a hard mismatch (e.g. 101469 vs 214). The fix
+# derives each episode's own span via ``(to_timestamp - from_timestamp) *
+# fps``. These tests pin that behavior.
+
+
+def _make_chunked_episode(tmp_path, *, num_frames, from_ts, to_ts, fps=10.0):
+    """Build an :class:`EpisodeData` pointing at a shared chunked MP4."""
+    import numpy as np
+
+    feat = "observation.images.image"
+    video_path = tmp_path / "videos" / feat / "chunk-000" / "file-000.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(b"fake-mp4")
+
+    return EpisodeData(
+        episode_index=0,
+        num_frames=num_frames,
+        timestamps=np.arange(num_frames, dtype=float) / fps,
+        meta={
+            "dataset_root": str(tmp_path),
+            "fps": fps,
+            "video_features": {
+                feat: {
+                    "chunk_index": 0,
+                    "file_index": 0,
+                    "from_timestamp": from_ts,
+                    "to_timestamp": to_ts,
+                }
+            },
+        },
+    )
+
+
+def test_chunked_video_uses_episode_span_not_file_frames(tmp_path, monkeypatch):
+    """A shared MP4 with many frames must not false-fail an episode.
+
+    The file holds 101469 frames total; the episode's own span is
+    (21.4 - 0.0) * 10 = 214 frames, matching its parquet count.
+    """
+    ep = _make_chunked_episode(tmp_path, num_frames=214, from_ts=0.0, to_ts=21.4)
+
+    monkeypatch.setattr(
+        "rda.metrics.video_integrity._count_video_frames", lambda _p: 101469
+    )
+
+    result = VideoFrameIntegrityMetric().compute(ep)
+
+    assert result.passed is True
+    checked = result.details["checked"][0]
+    assert checked["chunked"] is True
+    assert checked["episode_video_frames"] == 214
+    assert checked["delta"] == 0
+    assert checked["file_truncated"] is False
+    assert result.details["mismatched"] == []
+
+
+def test_chunked_video_detects_truncated_file(tmp_path, monkeypatch):
+    """If the episode's span runs past the end of the file, flag truncation."""
+    ep = _make_chunked_episode(tmp_path, num_frames=214, from_ts=0.0, to_ts=21.4)
+
+    # File only has 150 frames, but the episode span needs up to 214.
+    monkeypatch.setattr(
+        "rda.metrics.video_integrity._count_video_frames", lambda _p: 150
+    )
+
+    result = VideoFrameIntegrityMetric().compute(ep)
+
+    assert result.passed is False
+    checked = result.details["checked"][0]
+    assert checked["file_truncated"] is True
+    assert any(m["reason"] == "video_file_truncated" for m in result.details["mismatched"])
