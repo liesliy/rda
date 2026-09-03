@@ -101,6 +101,8 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "num_episodes": result.dataset_info.num_episodes,
             "total_frames": result.dataset_info.total_frames,
             "modalities": result.dataset_info.modalities,
+            "num_tasks": result.dataset_info.meta.get("num_tasks"),
+            "tasks": result.dataset_info.meta.get("tasks", {}),
         },
         "summary": {
             "total_episodes": compact.total_episodes,

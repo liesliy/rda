@@ -185,7 +185,20 @@ def _extract_episode_from_dataframe(
             d = d.squeeze(-1)
         done = d
 
+    # Task identity: a per-frame task_index column (LeRobot v3.0) maps this
+    # episode to a task. Take the majority value across the episode's frames
+    # (they should be homogeneous; majority vote tolerates rare label noise).
+    task_index = None
+    if "task_index" in ep_df.columns:
+        values = ep_df["task_index"].dropna().astype(int).tolist()
+        if values:
+            import collections
+
+            task_index = collections.Counter(values).most_common(1)[0][0]
+
     meta = {"source": "lerobot", "format_version": format_version}
+    if task_index is not None:
+        meta["task_index"] = task_index
 
     return EpisodeData(
         episode_index=ep_index,
@@ -266,6 +279,59 @@ def _load_episode_metadata_v30(dataset_path: Path):
     return pd.concat(frames, ignore_index=True)
 
 
+@lru_cache(maxsize=8)
+def _load_tasks_parquet_v30(dataset_path: Path) -> Dict[int, str]:
+    """Load the ``task_index -> description`` mapping from ``meta/tasks.parquet``.
+
+    LeRobot v3.0 multi-task datasets store task identity in
+    ``meta/tasks.parquet``: one row per task, linking the integer
+    ``task_index`` (also present per-frame in ``data/*.parquet``) to a
+    human-readable task description.
+
+    Two common layouts are supported:
+      1. index = description, single column ``task_index`` (e.g. libero_10);
+      2. columns ``task_index`` + ``task``/``task_description``.
+
+    Returns:
+        Dict mapping ``task_index`` (int) to description (str). Empty if the
+        file is absent or unparseable.
+    """
+    import pandas as pd
+
+    tasks_path = dataset_path / "meta" / "tasks.parquet"
+    if not tasks_path.exists():
+        return {}
+
+    try:
+        df = pd.read_parquet(tasks_path)
+    except Exception:
+        return {}
+
+    if "task_index" not in df.columns:
+        return {}
+
+    mapping: Dict[int, str] = {}
+    for row_idx, row in df.iterrows():
+        try:
+            task_index = int(row["task_index"])
+        except (TypeError, ValueError):
+            continue
+
+        # Prefer an explicit description column; fall back to the row index
+        # (used by layouts where the description is the DataFrame index).
+        description = None
+        for cand in ("task", "task_description", "description"):
+            if cand in df.columns:
+                description = row[cand]
+                break
+        if description is None:
+            description = row_idx
+
+        mapping[task_index] = str(description)
+
+    return mapping
+
+
 # Backwards-compatible alias
 _load_episode_metadata = _load_episode_metadata_v30
 
@@ -318,6 +384,8 @@ def _read_v30_fallback_file(parquet_path: str):
         name = field.name
         lower_name = name.lower()
         if name == "episode_index":
+            columns.append(name)
+        elif name == "task_index":
             columns.append(name)
         elif name in {"timestamp", "action", "next.reward", "next.done"}:
             columns.append(name)
@@ -381,6 +449,14 @@ def _read_episode_parquet_v30(
 
     episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, "v3.0")
     episode.meta["dataset_root"] = str(dataset_path)
+
+    # Resolve the human-readable task description for this episode's
+    # task_index (if the dataset declares task identity).
+    task_index = episode.meta.get("task_index")
+    if task_index is not None:
+        tasks = _load_tasks_parquet_v30(dataset_path)
+        if task_index in tasks:
+            episode.meta["task_description"] = tasks[task_index]
 
     # Video feature references live in the EPISODE METADATA parquet
     # (columns like ``videos/<feature>/chunk_index``), not in the data
@@ -662,6 +738,16 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
         }
         if "robot_type" in info:
             meta["robot_type"] = info["robot_type"]
+
+        # Task identity (LeRobot v3.0 multi-task datasets): surface the
+        # declared task count and the task_index -> description mapping so
+        # reports can answer "which task is this episode from?".
+        num_tasks = info.get("total_tasks", 0)
+        if num_tasks:
+            meta["num_tasks"] = num_tasks
+        tasks = _load_tasks_parquet_v30(dataset_path)
+        if tasks:
+            meta["tasks"] = tasks
 
         # If info.json doesn't have total_episodes / total_frames,
         # compute them from episode metadata (common in v2.1).

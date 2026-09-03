@@ -12,6 +12,7 @@ dataset with ``dtype: video`` features.
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,16 +27,36 @@ _SOFT_TOLERANCE = 0.01   # 1% — flag as review with explanation
 _HARD_TOLERANCE = 0.05   # 5% — flag as strong mismatch
 
 
+@lru_cache(maxsize=1024)
 def _count_video_frames(path: Path) -> int:
-    """Count frames in a video file using PyAV, falling back to OpenCV."""
+    """Count frames in a video file using PyAV, falling back to OpenCV.
+
+    Frame-count sources are tried in cheapest-to-most-expensive order:
+
+    1. ``nb_frames`` metadata key — exact and zero-decode when the MP4
+       writer populated it.
+    2. ``stream.frames`` (PyAV's ``AVStream.nb_frames``) — FFmpeg fills
+       this from the MP4/MOV ``stts`` box even when the metadata key is
+       absent, which is the common case for LeRobot/ego4d videos. Without
+       this path a video lacking the ``nb_frames`` key would fall through
+       to a full decode of every frame, making ``video_frame_integrity``
+       impractically slow on large datasets.
+    3. Decode-count fallback — accurate for any container, but slow; only
+       reached when FFmpeg cannot determine the frame count up front.
+
+    Results are memoized because a single chunked MP4 is usually shared by
+    many episodes, each of which would otherwise re-open and re-parse it.
+    """
     try:
         import av  # type: ignore
 
         with av.open(str(path)) as container:
             stream = container.streams.video[0]
-            # Fast metadata path: nb_frames is exact for MP4 when present.
-            if stream.metadata.get("nb_frames"):
-                return int(stream.metadata["nb_frames"])
+            nb = stream.metadata.get("nb_frames")
+            if nb and int(nb) > 0:
+                return int(nb)
+            if stream.frames and int(stream.frames) > 0:
+                return int(stream.frames)
             # Decode-count fallback (accurate for any container).
             return sum(1 for _ in container.decode(stream))
     except ImportError:
