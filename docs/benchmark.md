@@ -1,8 +1,8 @@
-# Benchmark: RDA on 12 Local Robot Datasets + Blind Test
+# Benchmark: RDA on 13 Local Robot Datasets + Blind Test
 
-**RDA version**: 0.5.4 · **Scope**: 4,959 episodes (observation) + 206 episodes (blind test) · **Last run**: 2026-08-31
+**RDA version**: 0.5.8 · **Scope**: 5,094 episodes (observation) + 206 episodes (blind test) · **Last run**: 2026-09-04
 
-We ran `rda audit` across 12 local LeRobot-format datasets — sim and real,
+We ran `rda audit` across 13 local LeRobot-format datasets — sim and real,
 scripted and human teleop, research arms and hobby hardware — with zero tuning
 per dataset. The same default thresholds, everywhere. This page is the
 reproducibility record; every figure below comes from saved RDA JSON reports.
@@ -17,6 +17,7 @@ The corrected rerun includes the LeRobot v3.0 loader fix released in 0.5.3.
 | aloha_insertion_scripted | sim / scripted | 50 | 1 / 49 / 0 | 1,633 (50 eps) | 63.7% |
 | aloha_transfer_scripted | sim / scripted | 50 | 5 / 45 / 0 | 2,489 (50 eps) | 64.0% |
 | bridge_sample | real WidowX / sampled | 25 | 4 / 21 / 0 | 91 (21 eps) | **93.3%** |
+| cmu_stretch | real Stretch / household tasks | 135 | 38 / 97 / 0 | 3,855 (135 eps) | 66.7% |
 | droid_100 | real Franka | 100 | 34 / 66 / 0 | 1,428 (99 eps) | 70.7% |
 | jaco_play | real Jaco | 1,085 | 390 / 695 / 0 | 11,958 (837 eps) | 74.1% |
 | libero (local copy) | sim / incomplete local copy | 1,693 | 213 / 707 / 773 | 6,276 (918 eps) | 73.7% (920 eps) |
@@ -28,6 +29,17 @@ The corrected rerun includes the LeRobot v3.0 loader fix released in 0.5.3.
 Rerun note (2026-08-31, v0.5.4): the pusht row above was re-audited during
 the blind test; the full 206-episode audit runs in **~2 seconds**. Verdicts
 matched the 0.5.3 record (43/163/0 baseline on the untouched copy).
+
+Addition note (2026-09-04, v0.5.8): `cmu_stretch` (lerobot/cmu_stretch, CMU
+Hello Robot Stretch, 135 household episodes, 25,016 frames) was downloaded
+via hf-mirror.com and audited with default thresholds: 38/97/0, spikes in
+135/135 episodes (max per-step action delta ~1.0 everywhere — binary
+gripper 0↔1 flips, an action-encoding artifact, not corruption; integrity
+layers clean on all 135 episodes), 66.7% median idle. First
+Stretch-platform entry in the table. `panda_pick_place_can` was tried
+first per priority but skipped: the HF mirror now returns 401 (gated),
+same situation as aloha_sim_transfer_cube_human. Full row numbers come
+from the saved JSON report (rda_benchmark_auto/cmu_stretch_report.json).
 
 ## Blind test (2026-08-31, v0.5.4)
 
