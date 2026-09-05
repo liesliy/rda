@@ -188,6 +188,180 @@ def _render_episode_table(table_df: pd.DataFrame, prefix: str) -> None:
             st.session_state.selected_episode = ep_indices[selected]
             st.rerun()
 
+def _status_chip(m) -> str:
+    """One-line status chip for a metric result."""
+    if m is None:
+        return "—"
+    status = (m.assessment or {}).get("status", "?")
+    if m.availability.value == "not_available":
+        reason = (m.assessment or {}).get("reason", "")
+        return f"⚪ N/A · {reason}" if reason else "⚪ N/A"
+    icon = {"pass": "✅", "review": "🟡", "exclude": "🔴"}.get(status, "⚪")
+    return f"{icon} {status.upper()}"
+
+
+def _render_visual_audit(ep_id: int, ep_result) -> None:
+    """Render the visual audit panel (VA-A integrity + VA-B quality)."""
+    st.markdown(f"### {t('vis_header')}")
+
+    vis_metrics = {
+        "video_freeze": ep_result.metrics.get("video_freeze"),
+        "video_timestamp_alignment": ep_result.metrics.get("video_timestamp_alignment"),
+        "video_stream_sync": ep_result.metrics.get("video_stream_sync"),
+        "visual_quality": ep_result.metrics.get("visual_quality"),
+    }
+    present = {k: v for k, v in vis_metrics.items() if v is not None}
+    if not present:
+        st.info(t("vis_no_visual"))
+        return
+
+    # Dependency-missing gate: visual metrics are "not audited", never "pass".
+    dep_missing = [
+        m for m in present.values()
+        if m.availability.value == "not_available"
+        and (m.assessment or {}).get("reason") == "video_deps_missing"
+    ]
+    if len(dep_missing) == len(present):
+        st.warning(t("vis_dep_missing"), icon="⚠️")
+        return
+    if dep_missing:
+        st.warning(t("vis_dep_missing"), icon="⚠️")
+
+    # ---- VA-A: hard-evidence integrity trio ----
+    st.markdown(f"#### {t('vis_va_a_header')}")
+    name_map = {
+        "video_freeze": t("vis_vf_name"),
+        "video_timestamp_alignment": t("vis_vta_name"),
+        "video_stream_sync": t("vis_vsync_name"),
+        "visual_quality": t("vis_vq_name"),
+    }
+    for key in ("video_freeze", "video_timestamp_alignment", "video_stream_sync"):
+        m = vis_metrics.get(key)
+        if m is None:
+            continue
+        msg = (m.message or "").strip()
+        chip = _status_chip(m)
+        if msg:
+            st.markdown(f"- **{name_map[key]}** — {chip}  \n  {msg}")
+        else:
+            st.markdown(f"- **{name_map[key]}** — {chip}")
+
+    # Freeze regions table (the actionable evidence)
+    m_vf = vis_metrics.get("video_freeze")
+    if m_vf is not None and m_vf.availability.value == "available":
+        details = m_vf.details or {}
+        regions = details.get("freeze_regions") or []
+        if regions:
+            st.caption(t("vis_freeze_regions", n=len(regions)))
+            rows = []
+            for r in regions[:8]:
+                rows.append({
+                    t("vis_col_feature"): r.get("feature", "—"),
+                    t("vis_col_span"): f"{r.get('parquet_start', '—')}–{r.get('parquet_end', '—')}",
+                    t("vis_col_duration"): r.get("duration_sec", "—"),
+                    t("vis_col_moving"): r.get("moving_ratio_in_span", "—"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption(t("vis_freeze_none"))
+
+    # ---- VA-B: observational quality measurement ----
+    m_vq = vis_metrics.get("visual_quality")
+    if m_vq is not None and m_vq.availability.value == "available":
+        st.markdown(f"#### {t('vis_va_b_header')}")
+        details = m_vq.details or {}
+        per_feature = details.get("per_feature") or {}
+        worst_feature = (m_vq.measurement or {}).get("worst_feature")
+        worst = per_feature.get(worst_feature) or {}
+
+        pen = (m_vq.measurement or {}).get("penalty", "—")
+        dominant = worst.get("dominant_issue", "—")
+        n_samples = details.get("sample_count", "—")
+        st.markdown(t("vis_penalty_line", pen=pen, issue=dominant, n=n_samples))
+        if worst.get("worst_frame_t") is not None:
+            st.caption(t("vis_worst_frame", t=worst["worst_frame_t"]))
+
+        if per_feature:
+            st.caption(t("vis_vq_cameras"))
+            rows = []
+            for feat, s in sorted(
+                per_feature.items(),
+                key=lambda kv: -kv[1].get("penalty", 0.0),
+            ):
+                rows.append({
+                    t("vis_col_feature"): feat + (" ★" if feat == worst_feature else ""),
+                    t("vis_col_blur"): s.get("median_blur_var", "—"),
+                    t("vis_col_blur_pen"): s.get("blur_penalty", "—"),
+                    t("vis_col_lum"): s.get("dark_frac", "—"),
+                    t("vis_col_bright"): s.get("bright_frac", "—"),
+                    t("vis_col_contrast"): s.get("low_contrast_frac", "—"),
+                    t("vis_col_exposure_pen"): s.get("exposure_penalty", "—"),
+                    t("vis_col_penalty"): s.get("penalty", "—"),
+                    t("vis_col_dominant"): s.get("dominant_issue", "—"),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            th = details.get("thresholds") or {}
+            st.caption(t(
+                "vis_thresholds",
+                blur=th.get("blur_var_floor", "—"),
+                dark=th.get("dark_mean", "—"),
+                bright=th.get("bright_mean", "—"),
+                contrast=th.get("contrast_floor", "—"),
+            ))
+
+            # Per-sample curves of the worst camera stream
+            samples = worst.get("samples") or []
+            if len(samples) >= 2:
+                st.caption(t("vis_samples_chart"))
+                df_s = pd.DataFrame(samples)
+                if "t" in df_s.columns:
+                    fig_vq = go.Figure()
+                    if "blur_var" in df_s.columns:
+                        bv = df_s["blur_var"].astype(float)
+                        bv_max = bv.max() if float(bv.max()) > 0 else 1.0
+                        fig_vq.add_trace(go.Scatter(
+                            x=df_s["t"], y=(bv / bv_max * 100.0).round(1),
+                            mode="lines+markers", name=t("vis_blur_var_norm"),
+                            line=dict(width=1.8),
+                        ))
+                    if "mean_lum" in df_s.columns:
+                        fig_vq.add_trace(go.Scatter(
+                            x=df_s["t"], y=df_s["mean_lum"],
+                            mode="lines+markers", name=t("vis_mean_lum"),
+                            line=dict(width=1.5, dash="dot"),
+                        ))
+                    if "contrast_p5_p95" in df_s.columns:
+                        fig_vq.add_trace(go.Scatter(
+                            x=df_s["t"], y=df_s["contrast_p5_p95"],
+                            mode="lines+markers", name=t("vis_contrast"),
+                            line=dict(width=1.5, dash="dash"),
+                        ))
+                    if "clipped_frac" in df_s.columns:
+                        fig_vq.add_trace(go.Scatter(
+                            x=df_s["t"], y=df_s["clipped_frac"],
+                            mode="lines+markers", name=t("vis_clipped_frac"),
+                            line=dict(width=1.5, dash="dot"),
+                            yaxis="y2",
+                        ))
+                    fig_vq.update_layout(
+                        xaxis_title=t("ep_traj_time_axis"),
+                        yaxis=dict(title=t("ep_traj_value_axis")),
+                        yaxis2=dict(
+                            title=t("vis_clipped_frac"), overlaying="y",
+                            side="right", range=[0, 1], showgrid=False,
+                        ),
+                        hovermode="x unified",
+                        height=300,
+                        margin=dict(l=40, r=50, t=20, b=30),
+                        legend=dict(orientation="h", y=-0.25),
+                    )
+                    st.plotly_chart(
+                        fig_vq, use_container_width=True,
+                        key=f"visq_{ep_id}",
+                    )
+
+
 def _render_episode_detail(ep_id: int) -> None:
     """Render the detail panel of a single episode."""
     st.divider()
@@ -312,6 +486,13 @@ def _render_episode_detail(ep_id: int) -> None:
             col_note: st.column_config.TextColumn(width="large"),
         },
     )
+
+    st.divider()
+
+    # Visual audit panel (v0.7.x UI catch-up, REQ-4)
+    _render_visual_audit(ep_id, ep_result)
+
+    st.divider()
 
     # Diagnosis
     st.markdown(f"### {t('ep_diag_header')}")

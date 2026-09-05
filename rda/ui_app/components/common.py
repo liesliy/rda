@@ -514,6 +514,74 @@ def _detect_pattern_type(ep_result) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# 视觉指标数据集级统计（v0.7.x UI catch-up, REQ-4）
+# ---------------------------------------------------------------------------
+
+VISUAL_METRIC_LABELS = {
+    "video_freeze": "vis_vf_name",
+    "video_timestamp_alignment": "vis_vta_name",
+    "video_stream_sync": "vis_vsync_name",
+    "visual_quality": "vis_vq_name",
+}
+
+
+def compute_visual_stats(result: DatasetAuditResult) -> Dict[str, Any]:
+    """汇总视觉四指标的数据集级状态。
+
+    Returns:
+        {
+            "has_video": bool,            # 任一 episode 存在视觉指标记录
+            "dep_missing_eps": int,       # video_deps_missing 的 episode 数
+            "checked_eps": int,           # 至少一个视觉指标 available 的 episode 数
+            "flagged_eps": int,           # 任一视觉指标 not passed 的 episode 数
+            "flagged_by_metric": {name: count},
+            "dep_missing_by_metric": {name: count},
+        }
+    """
+    checked_eps = 0
+    flagged_eps = 0
+    dep_missing_eps = 0
+    flagged_by_metric: Dict[str, int] = {}
+    dep_missing_by_metric: Dict[str, int] = {}
+
+    for ep in result.episodes.values():
+        ep_checked = False
+        ep_flagged = False
+        ep_dep_missing = False
+        for m_name in VISUAL_METRIC_LABELS:
+            m = ep.metrics.get(m_name)
+            if m is None:
+                continue
+            reason = (m.assessment or {}).get("reason")
+            if m.availability == MetricAvailability.NOT_AVAILABLE:
+                if reason == "video_deps_missing":
+                    ep_dep_missing = True
+                    dep_missing_by_metric[m_name] = dep_missing_by_metric.get(m_name, 0) + 1
+                continue
+            if m.availability != MetricAvailability.AVAILABLE:
+                continue
+            ep_checked = True
+            if not m.passed:
+                ep_flagged = True
+                flagged_by_metric[m_name] = flagged_by_metric.get(m_name, 0) + 1
+        if ep_checked:
+            checked_eps += 1
+        if ep_flagged:
+            flagged_eps += 1
+        if ep_dep_missing:
+            dep_missing_eps += 1
+
+    return {
+        "has_video": checked_eps > 0 or dep_missing_eps > 0,
+        "dep_missing_eps": dep_missing_eps,
+        "checked_eps": checked_eps,
+        "flagged_eps": flagged_eps,
+        "flagged_by_metric": flagged_by_metric,
+        "dep_missing_by_metric": dep_missing_by_metric,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 训练就绪度徽章样式
 # ---------------------------------------------------------------------------
 

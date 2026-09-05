@@ -22,6 +22,7 @@ from rda.ui_app.i18n import get_lang, t  # noqa: E402
 from components.common import (  # noqa: E402
     compute_dhi,
     compute_issue_stats,
+    compute_visual_stats,
     get_grade_badge,
     get_readiness_badge,
     make_radar_chart,
@@ -39,6 +40,9 @@ def _get_recommendation(metric_name: str) -> str:
         "timestamp_validity", "joint_limit", "sensor_synchronization",
         "sampling_jitter", "velocity_acceleration", "action_discontinuity",
         "idle_ratio", "distribution", "coverage",
+        # visual metrics (v0.7.x UI catch-up, REQ-4)
+        "video_freeze", "video_timestamp_alignment",
+        "video_stream_sync", "visual_quality",
     ):
         return t(key)
     return t("rec_generic")
@@ -171,6 +175,49 @@ with col3:
 st.caption(t("health_usable_caption"))
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Visual Integrity Overview (v0.7.x UI catch-up, REQ-4)
+# ---------------------------------------------------------------------------
+vis = compute_visual_stats(result)
+
+if vis["has_video"]:
+    st.subheader(t("health_vis_header"))
+    st.caption(t("health_vis_caption"))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric(t("health_vis_eps_checked"), vis["checked_eps"],
+                  f"{vis['checked_eps'] / max(total, 1) * 100:.0f}%")
+    with c2:
+        st.metric(t("health_vis_flagged"), vis["flagged_eps"],
+                  f"{vis['flagged_eps'] / max(total, 1) * 100:.0f}%" if vis["flagged_eps"] else None,
+                  delta_color="inverse")
+    with c3:
+        st.metric(t("health_vis_not_checked"), vis["dep_missing_eps"])
+
+    if vis["dep_missing_eps"]:
+        st.warning(t("health_vis_not_checked_hint"), icon="⚠️")
+
+    if vis["flagged_by_metric"]:
+        st.caption(t("health_vis_flagged_list"))
+        metric_labels = {
+            "video_freeze": t("vis_vf_name"),
+            "video_timestamp_alignment": t("vis_vta_name"),
+            "video_stream_sync": t("vis_vsync_name"),
+            "visual_quality": t("vis_vq_name"),
+        }
+        for m_name, count in sorted(vis["flagged_by_metric"].items(), key=lambda kv: -kv[1]):
+            st.info(f"**{metric_labels.get(m_name, m_name)}** — {count} / {total} episodes", icon="📷")
+        st.page_link(
+            "pages/4_Episode_Explorer.py",
+            label=t("health_view_episodes"),
+            icon="📋",
+        )
+    elif not vis["dep_missing_eps"]:
+        st.success(t("health_vis_all_ok"), icon="✅")
+
+    st.divider()
 
 # ---------------------------------------------------------------------------
 # Top Audit Observations

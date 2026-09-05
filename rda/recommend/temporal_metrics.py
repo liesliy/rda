@@ -38,6 +38,9 @@ from rda.io.schema import EpisodeData
 # REQ-3 (v0.6.0): minimum length of a consecutive non-idle segment for it
 # to count as "usable" in usable_retention_ratio. Aligned with openpi's
 # DROID chunked filter (min_non_idle_len=16 ≈ 1s at typical 15-30Hz).
+# REQ-3② (v0.7.3): this is the *floor*; compute_temporal_sufficiency
+# raises it to max(16, fps) when the episode's fps is known, so the
+# floor always means "at least 1 second" on high-fps (>16 Hz) data.
 USABLE_RUN_MIN_FRAMES = 16
 
 
@@ -228,10 +231,14 @@ class TemporalSufficiency:
     threshold: float = 0.0
     # REQ-3 (v0.6.0): DROID-aligned retention metrics.
     # usable_retention_ratio: fraction of frames inside "usable" runs —
-    #   consecutive non-idle segments of at least USABLE_RUN_MIN_FRAMES
-    #   frames (DROID min_non_idle_len=16 ≈ 1s at 15-30Hz). Directly
+    #   consecutive non-idle segments of at least usable_run_floor_frames
+    #   frames (REQ-3②: max(16, 1s-in-frames), DROID-aligned). Directly
     #   answers "how much data survives a chunk-aligned prune".
     usable_retention_ratio: float = 0.0
+    # REQ-3② (v0.7.3): the actual run-length floor applied for
+    # usable_retention_ratio (max(16, 1s-in-frames)); lets the report
+    # and server-side consumers know which semantics produced the ratio.
+    usable_run_floor_frames: int = USABLE_RUN_MIN_FRAMES
     # Longest run of consecutive all-idle chunks (in chunks). A static
     # stretch longer than chunk_size-1 chunks cannot fit any valid
     # chunk window (DROID min_idle_len semantics).
@@ -351,12 +358,26 @@ def compute_temporal_sufficiency(
 
     # --- REQ-3 (v0.6.0): DROID-aligned retention metrics ---
     # usable_retention_ratio: frames inside active runs of at least
-    # USABLE_RUN_MIN_FRAMES frames (DROID min_non_idle_len=16 ≈ 1s).
-    # An active run of k steps spans k+1 frames (see runs above).
-    usable_frames = sum(r for r in runs if r >= USABLE_RUN_MIN_FRAMES)
+    # MIN_USABLE_RUN frames, where MIN_USABLE_RUN = max(16, 1s in frames)
+    # (REQ-3②, v0.7.3): DROID's min_non_idle_len=16 encodes "≈1s at
+    # typical 15-30Hz". Above 16 Hz the frame floor alone undercounts
+    # the intended duration — at 50 Hz, 16 frames is only 0.32s, which
+    # lets sub-second twitches pass as "usable". Taking the max with
+    # 1s-in-frames restores the time-based semantics on high-fps data
+    # while keeping byte-identical behavior at ≤16 Hz (where 16 ≥ 1s).
+    # fps comes from episode.meta ("fps", set by the loader from
+    # info.json); fall back to the plain frame floor when unknown.
+    fps = episode.meta.get("fps") if episode.meta else None
+    try:
+        fps = int(fps) if fps else 0
+    except (TypeError, ValueError):
+        fps = 0
+    min_usable_run = max(USABLE_RUN_MIN_FRAMES, fps) if fps > 0 else USABLE_RUN_MIN_FRAMES
+    usable_frames = sum(r for r in runs if r >= min_usable_run)
     result.usable_retention_ratio = (
         usable_frames / T_frames if T_frames > 0 else 0.0
     )
+    result.usable_run_floor_frames = min_usable_run
     # max_idle_run_frames: longest run of consecutive idle steps, in
     # frames (k idle steps ≈ k+1 consecutive static frames).
     max_idle_steps = 0
@@ -431,6 +452,11 @@ class DatasetTemporalSufficiency:
     # REQ-3 (v0.6.0): DROID-aligned retention metrics (dataset level).
     usable_retention_ratio: Dict[str, float] = field(default_factory=dict)
     max_idle_run_frames: Dict[str, float] = field(default_factory=dict)
+    # REQ-3② (v0.7.3): median of the per-episode run-length floors that
+    # produced usable_retention_ratio (max(16, 1s-in-frames) when fps
+    # is known, else 16). Dataset-level so reports/API consumers can
+    # state the semantics; "unknown" floor is reported as 16.
+    usable_run_floor_frames: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict."""
@@ -448,6 +474,7 @@ class DatasetTemporalSufficiency:
             "valid_window_ratio_10": self.valid_window_ratio_10,
             "valid_window_ratio_20": self.valid_window_ratio_20,
             "usable_retention_ratio": self.usable_retention_ratio,
+            "usable_run_floor_frames": self.usable_run_floor_frames,
             "max_idle_run_frames": self.max_idle_run_frames,
         }
 
@@ -518,6 +545,10 @@ def aggregate_temporal_sufficiency(
     # REQ-3 (v0.6.0): DROID-aligned retention metrics at dataset level.
     result.usable_retention_ratio = _dist(
         np.array([ts.usable_retention_ratio for ts in valid], dtype=np.float64)
+    )
+    # REQ-3②: dataset-level view of the run-length floor that was applied.
+    result.usable_run_floor_frames = _dist(
+        np.array([float(ts.usable_run_floor_frames) for ts in valid], dtype=np.float64)
     )
     result.max_idle_run_frames = _dist(
         np.array([float(ts.max_idle_run_frames) for ts in valid], dtype=np.float64)

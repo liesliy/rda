@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.3 - 2026-09-05
+
+### Added (v0.7.x UI catch-up + REQ-3②)
+- UI: Visual Audit panel in Episode Explorer detail — VA-A integrity
+  trio status lines with freeze-region table (per-stream span,
+  duration, moving ratio) and VA-B quality breakdown (per-camera
+  penalty table + per-sample quality curves with clipped-frac on a
+  secondary axis). `video_deps_missing` renders a loud "not audited ≠
+  pass" warning and hides the quality tables instead of faking them.
+- UI: Visual Integrity Overview section in Health Overview —
+  dataset-level checked / flagged / not-checked episode counts with a
+  per-metric findings list and a page link into the review queue.
+- i18n: 45 new bilingual (zh/en) keys covering the visual panels,
+  visual recommendation texts (`rec_video_freeze`,
+  `rec_video_timestamp_alignment`, `rec_video_stream_sync`,
+  `rec_visual_quality`) and the health visual overview.
+- REQ-3②: fps-aware usable-run floor — `usable_retention_ratio` now
+  uses `max(16, 1s-in-frames)` as the minimum run length when the
+  episode's fps is known (from dataset info.json via the loader), and
+  exactly 16 otherwise (byte-identical to 0.6.x at ≤16 Hz). Rationale:
+  DROID's `min_non_idle_len=16` encodes "≈1 s at 15-30 Hz"; at 50 Hz
+  16 frames is 0.32 s, letting sub-second twitches count as usable
+  (measured on aloha_insertion @50 Hz: usable retention 24.6% → 0.0%
+  on a genuine static episode). New field `usable_run_floor_frames`
+  (per episode and dataset median) reports which floor produced the
+  ratio; server payload gains the field additively (v0.6.1+ parsers
+  ignore unknown keys).
+- Tests: `tests/test_ui_visual_audit.py` (stats layer + Streamlit
+  AppTest end-to-end runs of both pages, incl. the dep-missing
+  never-pass guarantee) and `tests/test_req3b_fps_floor.py` (floor
+  semantics + fallbacks). Suite: 136 passed, 4 skipped.
+
 ## 0.7.2 - 2026-09-05
 
 ### Fixed

@@ -101,11 +101,15 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
         # REQ-3 (v0.6.0): DROID-aligned retention metrics
         usable = getattr(ts, "usable_retention_ratio", {}).get("median", 0.0)
         max_idle = getattr(ts, "max_idle_run_frames", {}).get("median", 0.0)
+        # REQ-3② (v0.7.3): report the floor actually applied
+        # (max(16, 1s-in-frames) when fps is known; 16 otherwise).
+        floor = getattr(ts, "usable_run_floor_frames", {}).get("median", 0.0)
+        floor = int(round(floor)) if floor else 16
         if lang == "zh":
-            lines.append(f"  usable_retention:      {usable:.1%}  (连续 ≥16 帧非静止段帧占比, 对齐 DROID)")
+            lines.append(f"  usable_retention:      {usable:.1%}  (连续 ≥{floor} 帧非静止段帧占比, 对齐 DROID; ≥16 帧且 ≥1s)")
             lines.append(f"  max_idle_run:          {max_idle:.0f} 帧  (最长连续静止段)")
         else:
-            lines.append(f"  usable_retention:      {usable:.1%}  (frames in runs >= 16 non-idle, DROID-aligned)")
+            lines.append(f"  usable_retention:      {usable:.1%}  (frames in runs >= {floor} non-idle, DROID-aligned; >=16 frames and >=1s)")
             lines.append(f"  max_idle_run:          {max_idle:.0f} frames  (longest static stretch)")
     else:
         if lang == "zh":

@@ -35,7 +35,12 @@ Optional dependency tiers:
 
 **Visual metrics without PyAV are reported as "not audited", never as
 "pass"**: the JSON report carries a top-level `skipped_by_missing_dep`
-field and the CLI prints a warning listing the skipped checks.
+field and the CLI prints a warning listing the skipped checks. The web
+dashboard shows the same guarantee — a dep-missing dataset renders a
+"not audited ≠ pass" banner, and the Health Overview adds a Visual
+Integrity section (checked / flagged / not-checked episode counts) while
+Episode Explorer gains a per-episode Visual Audit panel (freeze-region
+table, per-camera quality penalties, per-sample quality curves).
 
 ## Quick start
 
@@ -50,7 +55,7 @@ rda recommend /path/to/dataset --policy temporal   # or frame-wise
 rda ui
 ```
 
-`rda audit` is fully offline. `rda recommend` computes all metrics locally and sends only aggregated statistics (<1KB) to the rules API — cached for offline reuse, and `RDA_API_URL` can point to your own server for private deployments.
+`rda audit` is fully offline. `rda recommend` computes all metrics locally and sends only aggregated statistics (<1KB) to the rules API — cached for offline reuse, and `RDA_API_URL` can point to your own server for private deployments. The `usable_retention` statistic is **fps-aware** (v0.7.3): a "usable" run must span ≥16 frames *and* ≥1 second (DROID's `min_non_idle_len=16` encodes 1 s at 15-30 Hz; on 50 Hz data the floor rises to 50 frames so sub-second twitches no longer count).
 
 <p align="center">
   <img width="2549" alt="RDA recommendations" src="https://github.com/user-attachments/assets/e366cdf1-b169-46b0-b020-5327493a9124" />
