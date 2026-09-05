@@ -14,6 +14,10 @@ client-side:
 - TRIM_INITIAL  : only when the initial-idle prefix is essentially pure
   waiting (short prefix carrying most of the idle mass) and the target
   model is frame-wise. Never for temporal policies.
+- DISCARD_STATIC: only when an episode is essentially all idle
+  (usable_retention_ratio ≈ 0 and idle ratio > 0.95). Mirrors the
+  openpi/DROID practice of dropping near-static demonstrations
+  outright (v0.6.0, REQ-3). EXPERIMENTAL confidence offline.
 - DO_NOT_PRUNE  : the default. When the offline path cannot establish a
   clearly safe condition, it says "don't prune".
 
@@ -38,6 +42,15 @@ from rda.recommend.types import (
 
 OFFLINE_RULES_VERSION = "offline-fallback"
 
+# REQ-3 (v0.6.0): an episode whose idle ratio exceeds this is considered
+# near-static. Aligned with the openpi DROID idle-filter philosophy
+# (drop demonstrations with no usable manipulation activity).
+DISCARD_STATIC_IDLE_RATIO = 0.95
+# ...and whose usable retention (frames inside runs >= 16 non-idle
+# frames) is essentially zero, so chunk-based training gets nothing
+# out of it anyway.
+DISCARD_STATIC_USABLE_MAX = 0.05
+
 
 def _dist_median(d, default: float = 0.0) -> float:
     return float(d.get("median", default)) if d else default
@@ -47,6 +60,7 @@ def build_offline_result(
     agg,
     target_policy: TargetPolicy,
     lang: str = "zh",
+    policy_chunk_size=None,
 ) -> RecommendationResult:
     """Build a conservative RecommendationResult from local aggregates only.
 
@@ -54,6 +68,10 @@ def build_offline_result(
         agg: DatasetTemporalSufficiency computed client-side.
         target_policy: The user's intended model architecture.
         lang: Copy language ("zh" or "en").
+        policy_chunk_size: Optional target-policy chunk size (REQ-3).
+            The offline path does not evaluate chunk-aligned rules
+            (server-side only); accepted for signature compatibility
+            and mentioned in the copy when provided.
 
     Returns:
         RecommendationResult with rules_version = "offline-fallback".
@@ -64,6 +82,7 @@ def build_offline_result(
     idle_total = _dist_median(agg.idle_total_ratio)
     idle_prefix = _dist_median(agg.idle_prefix_ratio)
     computed = agg.computed_episodes
+    usable_retention = _dist_median(getattr(agg, "usable_retention_ratio", {}))
 
     caveats = [HELD_OUT_VALIDATION] + GENERAL_CAVEATS
     recommendations: List[Recommendation] = []
@@ -82,6 +101,54 @@ def build_offline_result(
             title="保守起见，不剪枝 (DO_NOT_PRUNE)" if zh else "DO_NOT_PRUNE",
             summary=summary,
             details=[],
+            caveats=caveats,
+        ))
+        return _wrap(agg, target_policy, recommendations)
+
+    # ---- Branch 0 (REQ-3, v0.6.0): near-static episodes ----
+    # An essentially all-idle dataset (median idle > 95%, usable
+    # retention ≈ 0) has no chunk-usable content regardless of policy;
+    # mirroring openpi/DROID's practice of dropping static
+    # demonstrations. EXPERIMENTAL offline — the per-episode decision
+    # (which exact episodes) needs the server-side engine.
+    if idle_total > DISCARD_STATIC_IDLE_RATIO and usable_retention < DISCARD_STATIC_USABLE_MAX:
+        if zh:
+            title = "近静态数据，建议人工确认后整条剔除 (DISCARD_STATIC, 离线保守判定)"
+            summary = (
+                f"数据集 idle 占比中位数约 {idle_total:.1%}，且有效保留比"
+                f"（连续 ≥16 帧非静止段的帧占比）仅 {usable_retention:.1%}——"
+                "几乎没有可供 chunk 训练使用的连续动作段。这与 openpi DROID "
+                "过滤近乎静止演示的做法一致，建议逐条人工确认后整条剔除。"
+            )
+            details = [
+                f"总 idle 占比（中位数）：{idle_total:.1%}",
+                f"有效保留比（中位数）：{usable_retention:.1%}（阈值：<5%）",
+                "离线模式只给出数据集级判断；具体哪些 episode 需要剔除，"
+                "请恢复联网后由服务端规则引擎逐条给出。",
+            ]
+        else:
+            title = "DISCARD_STATIC (offline conservative check)"
+            summary = (
+                f"Median idle ratio is ~{idle_total:.1%} and usable retention "
+                f"(frames inside runs of >= 16 non-idle frames) is only "
+                f"{usable_retention:.1%} — almost no chunk-usable content. "
+                "Consistent with openpi/DROID dropping near-static "
+                "demonstrations; review episodes individually before "
+                "discarding."
+            )
+            details = [
+                f"Total idle ratio (median): {idle_total:.1%}",
+                f"Usable retention ratio (median): {usable_retention:.1%} "
+                "(threshold: < 5%)",
+                "Offline mode gives a dataset-level signal only; re-run "
+                "online for per-episode discard decisions.",
+            ]
+        recommendations.append(Recommendation(
+            action=RecommendationAction.DISCARD_STATIC,
+            confidence=ConfidenceLevel.EXPERIMENTAL,
+            title=title,
+            summary=summary,
+            details=details,
             caveats=caveats,
         ))
         return _wrap(agg, target_policy, recommendations)

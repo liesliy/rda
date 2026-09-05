@@ -98,6 +98,15 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
             lines.append(f"  active_run_p50/p90:    {active_p50:.0f} / {active_p90:.0f} frames  (active-run length)")
             lines.append(f"  transition_count:      {transitions:.0f}  (idle->active transitions per episode)")
         lines.append(f"  valid_window_ratio:    seq=5: {vw5:.1%} | seq=10: {vw10:.1%} | seq=20: {vw20:.1%}")
+        # REQ-3 (v0.6.0): DROID-aligned retention metrics
+        usable = getattr(ts, "usable_retention_ratio", {}).get("median", 0.0)
+        max_idle = getattr(ts, "max_idle_run_frames", {}).get("median", 0.0)
+        if lang == "zh":
+            lines.append(f"  usable_retention:      {usable:.1%}  (连续 ≥16 帧非静止段帧占比, 对齐 DROID)")
+            lines.append(f"  max_idle_run:          {max_idle:.0f} 帧  (最长连续静止段)")
+        else:
+            lines.append(f"  usable_retention:      {usable:.1%}  (frames in runs >= 16 non-idle, DROID-aligned)")
+            lines.append(f"  max_idle_run:          {max_idle:.0f} frames  (longest static stretch)")
     else:
         if lang == "zh":
             lines.append("  无法计算 temporal sufficiency 指标（缺少 action 数据）。")
@@ -132,6 +141,26 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
             if rec.details:
                 for detail in rec.details:
                     lines.append(f"       - {detail}")
+            lines.append("")
+            continue
+
+        # REQ-3/REQ-2 (v0.6.0): review-type actions render with a
+        # "human review" marker instead of the generic layout.
+        if rec.action.value in (
+            "DISCARD_STATIC", "SMOOTHING_REVIEW", "CALIBRATION_CHECK",
+            "COVERAGE_SUGGESTION",
+        ):
+            lines.append(f"  {rec_word} {i}: {conf_mark} {rec.title}")
+            lines.append(f"         {rec.summary}")
+            lines.append("")
+            if rec.details:
+                for detail in rec.details:
+                    lines.append(f"       - {detail}")
+                lines.append("")
+            if lang == "zh":
+                lines.append("       ⚑ 此建议为人工复核信号，不构成自动处理指令。")
+            else:
+                lines.append("       ⚑ Human-review signal — not an automated processing instruction.")
             lines.append("")
             continue
 

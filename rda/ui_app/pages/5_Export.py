@@ -23,6 +23,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from rda.ui_app.i18n import get_lang, t  # noqa: E402
 
+
+def _get_tool_version() -> str:
+    """Return the installed RDA tool version (lazy import)."""
+    from rda import __version__
+
+    return __version__
+
 # ---------------------------------------------------------------------------
 # Helper functions (moved to top for Streamlit compatibility)
 # ---------------------------------------------------------------------------
@@ -109,7 +116,8 @@ def _generate_json_export(episodes, scope: str) -> str:
     hero = compute_hero_metrics(dataset_metrics)
 
     report = {
-        "version": "0.2.0",
+        "report_schema_version": "1.0",
+        "tool_version": _get_tool_version(),
         "export_scope": scope,
         "exported_episodes": len(episodes),
         "dataset": full_report["dataset"],

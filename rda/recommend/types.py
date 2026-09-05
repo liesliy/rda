@@ -32,6 +32,21 @@ class RecommendationAction(str, Enum):
     # all TRIM_* suggestions are suppressed. Older clients that receive
     # this value degrade to NO_RECOMMENDATION via from_dict (safe).
     REPAIR_FIRST = "REPAIR_FIRST"
+    # REQ-3 (v0.6.0): an episode (or dataset) is essentially all-idle
+    # with near-zero chunk-usable content. Mirrors openpi/DROID's
+    # practice of dropping near-static demonstrations. Also degrades
+    # to NO_RECOMMENDATION on older clients via from_dict (safe).
+    DISCARD_STATIC = "DISCARD_STATIC"
+    # REQ-2 (v0.6.0): review suggestion for action spikes / jerk
+    # outliers (possible smoothing post-processing or teleop glitches).
+    # Human review, never auto-deletion.
+    SMOOTHING_REVIEW = "SMOOTHING_REVIEW"
+    # REQ-2 (v0.6.0): sensor timestamp sync p95 exceeds the dataset's
+    # own baseline (×2) — check calibration / timestamp alignment.
+    CALIBRATION_CHECK = "CALIBRATION_CHECK"
+    # REQ-2 (v0.6.0): state-space occupancy below the dataset's own
+    # distribution quantiles — consider richer coverage in collection.
+    COVERAGE_SUGGESTION = "COVERAGE_SUGGESTION"
 
 
 class ConfidenceLevel(str, Enum):

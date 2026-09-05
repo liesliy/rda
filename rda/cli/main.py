@@ -160,10 +160,10 @@ def audit(
         dataset_info = load_lerobot_dataset(path_str)
     except ImportError as e:
         click.echo(f"Error: {e}", err=True)
-        click.echo(
-            "  Install it with: pip install lerobot",
-            err=True,
-        )
+        # The loader raises a specific message when pandas/pyarrow are
+        # missing (direct-parquet path); only suggest lerobot otherwise.
+        if "pandas and pyarrow" not in str(e):
+            click.echo("  Install it with: pip install lerobot", err=True)
         sys.exit(1)
     except Exception as e:
         # Catch-all for malformed / unreadable datasets
@@ -456,6 +456,17 @@ def example() -> None:
     ),
 )
 @click.option(
+    "--policy-chunk-size",
+    type=click.IntRange(2, 200),
+    default=None,
+    help=(
+        "Action chunk size of your target policy (REQ-3, DROID-aligned). "
+        "Valid-window and tail-trim evaluation is aligned to this length "
+        "instead of the legacy fixed tiers. E.g. 100 for ACT, 16 for "
+        "Diffusion Policy."
+    ),
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -469,6 +480,7 @@ def recommend(
     output: Optional[Path],
     lang: str,
     offline: bool,
+    policy_chunk_size: Optional[int],
     verbose: bool,
 ) -> None:
     """Generate data optimization recommendations for the dataset at PATH.
@@ -552,6 +564,7 @@ def recommend(
             ),
             lang=lang,
             offline=offline,
+            policy_chunk_size=policy_chunk_size,
         )
     except Exception as e:
         click.echo(f"Error: Recommendation failed: {e}", err=True)

@@ -50,7 +50,7 @@ CACHE_TTL_DAYS = 30
 REQUEST_TIMEOUT = 30  # seconds
 # REQ-1 (v0.5.9): payload contract version. v2 adds verdict_summary;
 # the server reads it only when >= 2, so v1 servers ignore it safely.
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 
 
 def get_api_url() -> str:
@@ -67,25 +67,32 @@ def _cache_key(
     policy: str,
     lang: str = "zh",
     verdict_summary: Optional[Dict[str, Any]] = None,
+    policy_chunk_size: Optional[int] = None,
 ) -> str:
     """Generate a stable cache key from metrics + policy + language.
 
-    v2 (REQ-1): verdict evidence participates in the result semantics
-    (EXCLUDE datasets must not hit a cached TRIM result), so the key is
-    namespaced with "v2-" and includes the verdict summary. Old v1 keys
-    can no longer collide with verdict-aware results. NOTE: no colon in
-    the prefix — colons are reserved characters on Windows and a
+    v3 (REQ-3): policy_chunk_size changes rule outcomes (dynamic valid
+    window alignment + tail-trim frame counts), so it participates in
+    the key. The "v3-" prefix also invalidates v2 entries that lacked
+    the new DROID-aligned retention metrics. NOTE: no colon in the
+    prefix — colons are reserved characters on Windows and a
     "v2:<hash>" filename silently fails to write there.
     """
     ts_dict = temporal_sufficiency.to_dict()
     # Sort keys for stable hash
     payload = json.dumps(
-        {"policy": policy, "lang": lang, "ts": ts_dict, "vs": verdict_summary or {}},
+        {
+            "policy": policy,
+            "lang": lang,
+            "ts": ts_dict,
+            "vs": verdict_summary or {},
+            "pcs": policy_chunk_size,
+        },
         sort_keys=True,
         default=str,
     )
     digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
-    return f"v2-{digest}"
+    return f"v3-{digest}"
 
 
 def _cache_path(key: str) -> Path:
@@ -193,6 +200,7 @@ def _call_api(
     total_frames: int,
     lang: str = "zh",
     verdict_summary: Optional[Dict[str, Any]] = None,
+    policy_chunk_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Call the remote recommendation API.
 
@@ -214,22 +222,29 @@ def _call_api(
     api_url = get_api_url()
     ts_dict = temporal_sufficiency.to_dict()
 
+    body: Dict[str, Any] = {
+        "contract_version": CONTRACT_VERSION,
+        "policy": policy,
+        "temporal_sufficiency": ts_dict,
+        "episode_count": episode_count,
+        "total_frames": total_frames,
+        "lang": lang,
+        # REQ-1: verdict evidence from the client-side preflight
+        # pass. v1 servers ignore unknown keys; v2 servers gate
+        # TRIM suggestions on this.
+        "verdict_summary": verdict_summary or {},
+    }
+    # REQ-3: optional policy chunk size for DROID-aligned dynamic
+    # window rules. v1/v2 servers ignore unknown keys (lenient
+    # parsing); None means "not provided".
+    if policy_chunk_size is not None:
+        body["policy_chunk_size"] = int(policy_chunk_size)
+
     resp = requests.post(
         f"{api_url}/api/v1/recommend",
-        json={
-            "contract_version": CONTRACT_VERSION,
-            "policy": policy,
-            "temporal_sufficiency": ts_dict,
-            "episode_count": episode_count,
-            "total_frames": total_frames,
-            "lang": lang,
-            # REQ-1: verdict evidence from the client-side preflight
-            # pass. v1 servers ignore unknown keys; v2 servers gate
-            # TRIM suggestions on this.
-            "verdict_summary": verdict_summary or {},
-        },
+        json=body,
         timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": f"rda-cli/0.5.9"},
+        headers={"User-Agent": f"rda-cli/0.6.0"},
     )
 
     if resp.status_code == 429:
@@ -260,7 +275,7 @@ def _get_remote_rules_version() -> Optional[str]:
         resp = requests.get(
             f"{get_api_url()}/api/v1/health",
             timeout=10,
-            headers={"User-Agent": "rda-cli/0.5.0"},
+            headers={"User-Agent": "rda-cli/0.6.0"},
         )
         if resp.status_code == 200:
             return resp.json().get("rules_version")
@@ -281,6 +296,7 @@ def run_recommendation(
     progress_callback=None,
     lang: str = "zh",
     offline: bool = False,
+    policy_chunk_size: Optional[int] = None,
 ) -> RecommendationResult:
     """Run the full recommendation pipeline.
 
@@ -306,6 +322,10 @@ def run_recommendation(
         offline: Skip the API entirely and use the conservative local
             fallback. Use this on machines that must never make network
             calls (air-gapped clusters, private deployment QA, etc.).
+        policy_chunk_size: Optional action chunk size of the target
+            policy (REQ-3, DROID-aligned). When provided, the server
+            aligns valid-window and tail-trim rules to this chunk
+            length; None keeps the legacy fixed window tiers.
 
     Returns:
         RecommendationResult with recommendations and rules_version.
@@ -336,11 +356,13 @@ def run_recommendation(
             "(rules not evaluated server-side).",
             err=True,
         )
-        result = build_offline_result(agg, target_policy, lang=lang)
+        result = build_offline_result(
+            agg, target_policy, lang=lang, policy_chunk_size=policy_chunk_size
+        )
         return gate_result_by_verdict(result, verdict_summary, lang=lang)
 
-    # Step 2: Check cache (v2 keys include verdict evidence)
-    key = _cache_key(agg, policy_name, lang, verdict_payload)
+    # Step 2: Check cache (v3 keys include verdict + chunk size)
+    key = _cache_key(agg, policy_name, lang, verdict_payload, policy_chunk_size)
     cached = _read_cache(key)
 
     # Step 3: Try API
@@ -355,6 +377,7 @@ def run_recommendation(
             total_frames=total_frames,
             lang=lang,
             verdict_summary=verdict_payload,
+            policy_chunk_size=policy_chunk_size,
         )
     except ImportError as e:
         api_error = str(e)
@@ -403,5 +426,7 @@ def run_recommendation(
         "server-side evaluation.",
         err=True,
     )
-    result = build_offline_result(agg, target_policy, lang=lang)
+    result = build_offline_result(
+        agg, target_policy, lang=lang, policy_chunk_size=policy_chunk_size
+    )
     return gate_result_by_verdict(result, verdict_summary, lang=lang)

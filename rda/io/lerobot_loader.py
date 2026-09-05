@@ -243,6 +243,15 @@ def _try_lerobot_import():
     return None, "not_installed"
 
 
+# Reason string used to flag a missing pandas/pyarrow in the direct-parquet
+# path, so callers surface the correct install hint instead of the
+# misleading "pip install lerobot" one (v0.6.0).
+_MISSING_PARQUET_DEPS = (
+    "Direct parquet reading requires pandas and pyarrow. "
+    "Install them with: pip install pandas pyarrow"
+)
+
+
 # ---------------------------------------------------------------------------
 # v3.0 format helpers (original logic, preserved)
 # ---------------------------------------------------------------------------
@@ -257,7 +266,10 @@ def _load_episode_metadata_v30(dataset_path: Path):
     like ``episode_index``, ``length``, ``data/chunk_index``,
     ``data/file_index``, ``dataset_from_index``, ``dataset_to_index``, etc.
     """
-    import pandas as pd
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     ep_dir = dataset_path / "meta" / "episodes"
     if not ep_dir.exists():
@@ -296,7 +308,10 @@ def _load_tasks_parquet_v30(dataset_path: Path) -> Dict[int, str]:
         Dict mapping ``task_index`` (int) to description (str). Empty if the
         file is absent or unparseable.
     """
-    import pandas as pd
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     tasks_path = dataset_path / "meta" / "tasks.parquet"
     if not tasks_path.exists():
@@ -345,7 +360,10 @@ def _build_episode_file_index_v30(dataset_path: str) -> Dict[int, Path]:
     ``episode_index`` column is read while building this fallback index, so
     image/video columns are not loaded during the scan.
     """
-    import pyarrow.parquet as pq
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     data_dir = Path(dataset_path) / "data"
     if not data_dir.exists():
@@ -374,8 +392,14 @@ def _read_v30_fallback_file(parquet_path: str):
     resulting per-file DataFrame is cached because a v3.0 file can contain
     many episodes.
     """
-    import pandas as pd
-    import pyarrow.parquet as pq
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     path = Path(parquet_path)
     schema = pq.ParquetFile(path).schema_arrow
@@ -417,7 +441,10 @@ def _read_episode_parquet_v30(
     Returns:
         EpisodeData for this episode.
     """
-    import pandas as pd
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     chunk_idx = int(ep_meta_row["data/chunk_index"])
     file_idx = int(ep_meta_row["data/file_index"])
@@ -520,7 +547,10 @@ def _load_episode_metadata_v21(dataset_path: Path):
         pandas DataFrame with one row per episode, containing at least
         ``episode_index`` and ``length`` columns.
     """
-    import pandas as pd
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     ep_path = dataset_path / "meta" / "episodes.jsonl"
     if not ep_path.exists():
@@ -599,7 +629,10 @@ def _read_episode_parquet_v21(
     Returns:
         EpisodeData for this episode.
     """
-    import pandas as pd
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError(_MISSING_PARQUET_DEPS) from None
 
     ep_index = int(ep_meta_row["episode_index"])
 

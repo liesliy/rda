@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 - 2026-09-05
+
+### Added
+
+- **REQ-3: DROID-aligned idle rules.** Per-episode temporal metrics now include `usable_retention_ratio` (fraction of frames inside consecutive non-idle runs of ≥16 frames — openpi's DROID `min_non_idle_len=16` ≈ 1s at typical 15–30Hz) and `max_idle_run_frames` (longest static stretch). New `rda recommend --policy-chunk-size N` flag (e.g. 100 for ACT, 16 for Diffusion Policy) sends `policy_chunk_size` under `contract_version: 3`; the server then evaluates window integrity AT the chunk length instead of the legacy fixed 5/10/20 tiers, and may emit a chunk-window-collapse `DO_NOT_PRUNE` warning plus an EXPERIMENTAL tail-trim suggestion (DROID `filter_last_n_in_ranges=10` reference). Near-static datasets (median idle >95% AND usable retention <5%) now receive a single `DISCARD_STATIC` recommendation, mirroring openpi/DROID dropping near-static demonstrations — human review required, never automated. Offline fallback implements the same DISCARD_STATIC branch conservatively (dataset-level signal only). New enum actions degrade to `NO_RECOMMENDATION` on older clients via `from_dict` (safe).
+- **REQ-2: advisory recommendation types.** New `SMOOTHING_REVIEW` (action spikes beyond 5×MAD of the episode's own motion — teleop glitches, sensor noise, or post-hoc smoothing; human review, never auto-deletion), `CALIBRATION_CHECK` (sensor sync p95 > 2× the dataset's own baseline — calibration drift detection without absolute hardware thresholds), and `COVERAGE_SUGGESTION` (episodes below the dataset's P5 state-space occupancy — collection guidance for data producers, not a deletion hint). All three are driven by optional `audit_signals` in the v3 payload (whitelisted keys, bounded size), advisory-only, and rendered with an explicit "human-review signal" marker in the CLI output.
+- **REQ-8: metric provenance.** `docs/provenance/<metric>/` ships a four-file record (algorithm.md, source.md, implementation_origin.md, license.md) for all 14 metrics, with a README index — making the IP boundary explicit: public precedents inform ideas only, all implementation is original.
+- Server engine v4 (rules 0.7.0): chunk-aligned window evaluation, DISCARD_STATIC, tail-trim, and the three REQ-2 advisory rules. v1/v2 requests behave exactly as before (all new parameters optional, unknown payload fields tolerated).
+
+### Fixed
+
+- Audit JSON report top-level `version: "0.2.0"` was a hardcoded report-schema version that read like a tool version next to `tool_version`. Renamed to `report_schema_version: "1.0"`; no consumer ever read the old key (verified repo-wide).
+- `rda audit` on a LeRobot v3.0 dataset without pandas/pyarrow installed suggested `pip install lerobot` — wrong for the direct-parquet path, which needs only pandas/pyarrow. The loader now raises a precise message naming the actual missing packages; the CLI only suggests lerobot when the issue is really about lerobot.
+- CLI output now reports the new DROID-aligned metrics (`usable_retention`, `max_idle_run`) in the temporal-sufficiency overview.
+
 ## 0.5.9 - 2026-09-05
 
 ### Added

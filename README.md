@@ -63,6 +63,10 @@ python tools/rda_render.py rda_report.json --html report.html --badge badge.svg
 
 More: [CLI reference & metrics table](docs/cli.md) · [experiments](experiments/) · [real-world feedback form](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
 
+## Metric provenance
+
+Every metric ships with a four-file provenance record (`docs/provenance/<metric>/`): **algorithm.md** (how it works), **source.md** (public precedents consulted — ideas only), **implementation_origin.md** (original implementation, zero third-party code), **license.md** (compliance notes). Covered: all 12 metrics (`missing_dropout`, `invalid_values`, `schema_consistency`, `timestamp_validity`, `joint_limit`, `video_frame_integrity`, `sensor_synchronization`, `sampling_jitter`, `velocity_acceleration`, `action_discontinuity`, `temporal_sufficiency`, `idle_ratio`, `distribution`, `coverage`). Index: [docs/provenance/](docs/provenance/).
+
 ## Citation
 
 ```bibtex

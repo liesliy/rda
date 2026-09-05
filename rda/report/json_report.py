@@ -96,7 +96,9 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
     from rda import __version__ as _rda_version
 
     report = {
-        "version": "0.2.0",
+        # Report SCHEMA version (layout of this JSON document), NOT the tool
+        # version — bump when the report structure itself changes.
+        "report_schema_version": "1.0",
         "tool_version": _rda_version,
         "dataset": {
             "path": result.dataset_info.path,

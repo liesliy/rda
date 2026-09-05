@@ -35,6 +35,11 @@ import numpy as np
 
 from rda.io.schema import EpisodeData
 
+# REQ-3 (v0.6.0): minimum length of a consecutive non-idle segment for it
+# to count as "usable" in usable_retention_ratio. Aligned with openpi's
+# DROID chunked filter (min_non_idle_len=16 ≈ 1s at typical 15-30Hz).
+USABLE_RUN_MIN_FRAMES = 16
+
 
 # ---------------------------------------------------------------------------
 # Idle detection (reuses the same approach as IdleRatioMetric)
@@ -221,6 +226,16 @@ class TemporalSufficiency:
     active_runs: List[int] = field(default_factory=list)
     threshold_method: str = ""
     threshold: float = 0.0
+    # REQ-3 (v0.6.0): DROID-aligned retention metrics.
+    # usable_retention_ratio: fraction of frames inside "usable" runs —
+    #   consecutive non-idle segments of at least USABLE_RUN_MIN_FRAMES
+    #   frames (DROID min_non_idle_len=16 ≈ 1s at 15-30Hz). Directly
+    #   answers "how much data survives a chunk-aligned prune".
+    usable_retention_ratio: float = 0.0
+    # Longest run of consecutive all-idle chunks (in chunks). A static
+    # stretch longer than chunk_size-1 chunks cannot fit any valid
+    # chunk window (DROID min_idle_len semantics).
+    max_idle_run_frames: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (JSON-friendly)."""
@@ -237,6 +252,8 @@ class TemporalSufficiency:
             "valid_window_ratio_5": self.valid_window_ratio_5,
             "valid_window_ratio_10": self.valid_window_ratio_10,
             "valid_window_ratio_20": self.valid_window_ratio_20,
+            "usable_retention_ratio": self.usable_retention_ratio,
+            "max_idle_run_frames": self.max_idle_run_frames,
             "threshold_method": self.threshold_method,
             "threshold": self.threshold,
         }
@@ -332,6 +349,26 @@ def compute_temporal_sufficiency(
 
     result.idle_to_active_ratio = result.transition_count / T_steps if T_steps > 0 else 0.0
 
+    # --- REQ-3 (v0.6.0): DROID-aligned retention metrics ---
+    # usable_retention_ratio: frames inside active runs of at least
+    # USABLE_RUN_MIN_FRAMES frames (DROID min_non_idle_len=16 ≈ 1s).
+    # An active run of k steps spans k+1 frames (see runs above).
+    usable_frames = sum(r for r in runs if r >= USABLE_RUN_MIN_FRAMES)
+    result.usable_retention_ratio = (
+        usable_frames / T_frames if T_frames > 0 else 0.0
+    )
+    # max_idle_run_frames: longest run of consecutive idle steps, in
+    # frames (k idle steps ≈ k+1 consecutive static frames).
+    max_idle_steps = 0
+    current_idle = 0
+    for is_idle in idle_mask:
+        if is_idle:
+            current_idle += 1
+            max_idle_steps = max(max_idle_steps, current_idle)
+        else:
+            current_idle = 0
+    result.max_idle_run_frames = max_idle_steps + 1 if max_idle_steps > 0 else 0
+
     # --- Valid window ratios ---
     # A window of size N (frames) is "fully active" if none of its
     # N-1 internal steps are idle.
@@ -391,6 +428,9 @@ class DatasetTemporalSufficiency:
     valid_window_ratio_5: Dict[str, float] = field(default_factory=dict)
     valid_window_ratio_10: Dict[str, float] = field(default_factory=dict)
     valid_window_ratio_20: Dict[str, float] = field(default_factory=dict)
+    # REQ-3 (v0.6.0): DROID-aligned retention metrics (dataset level).
+    usable_retention_ratio: Dict[str, float] = field(default_factory=dict)
+    max_idle_run_frames: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict."""
@@ -407,6 +447,8 @@ class DatasetTemporalSufficiency:
             "valid_window_ratio_5": self.valid_window_ratio_5,
             "valid_window_ratio_10": self.valid_window_ratio_10,
             "valid_window_ratio_20": self.valid_window_ratio_20,
+            "usable_retention_ratio": self.usable_retention_ratio,
+            "max_idle_run_frames": self.max_idle_run_frames,
         }
 
 
@@ -472,6 +514,13 @@ def aggregate_temporal_sufficiency(
     )
     result.valid_window_ratio_20 = _dist(
         np.array([ts.valid_window_ratio_20 for ts in valid], dtype=np.float64)
+    )
+    # REQ-3 (v0.6.0): DROID-aligned retention metrics at dataset level.
+    result.usable_retention_ratio = _dist(
+        np.array([ts.usable_retention_ratio for ts in valid], dtype=np.float64)
+    )
+    result.max_idle_run_frames = _dist(
+        np.array([float(ts.max_idle_run_frames) for ts in valid], dtype=np.float64)
     )
 
     return result
