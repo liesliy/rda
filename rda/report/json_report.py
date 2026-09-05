@@ -141,7 +141,10 @@ def _skipped_by_missing_dep(result: DatasetAuditResult) -> Dict[str, int]:
     dep_by_reason = {"video_deps_missing": "av"}
     counts: Dict[str, int] = {}
     for ep in result.episodes.values():
-        for metric_result in ep.metric_results.values():
+        # ``metrics`` on EpisodeAuditResult; ``metric_results`` kept for
+        # older result shapes (defensive).
+        metric_map = getattr(ep, "metrics", None) or getattr(ep, "metric_results", {}) or {}
+        for metric_result in metric_map.values():
             reason = (metric_result.assessment or {}).get("reason")
             dep = dep_by_reason.get(reason)
             if dep:
