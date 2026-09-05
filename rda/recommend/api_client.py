@@ -26,6 +26,12 @@ from rda.recommend.types import (
     TargetPolicy,
 )
 from rda.recommend.local_fallback import build_offline_result
+from rda.recommend.preflight import (
+    PreflightAuditor,
+    PreflightSummary,
+    aggregate_preflight,
+    gate_result_by_verdict,
+)
 from rda.recommend.temporal_metrics import (
     DatasetTemporalSufficiency,
     TemporalSufficiency,
@@ -42,6 +48,9 @@ DEFAULT_API_URL = "https://rda.niusu2026.cn"
 CACHE_DIR = Path.home() / ".rda" / "cache"
 CACHE_TTL_DAYS = 30
 REQUEST_TIMEOUT = 30  # seconds
+# REQ-1 (v0.5.9): payload contract version. v2 adds verdict_summary;
+# the server reads it only when >= 2, so v1 servers ignore it safely.
+CONTRACT_VERSION = 2
 
 
 def get_api_url() -> str:
@@ -57,16 +66,26 @@ def _cache_key(
     temporal_sufficiency: DatasetTemporalSufficiency,
     policy: str,
     lang: str = "zh",
+    verdict_summary: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Generate a stable cache key from metrics + policy + language."""
+    """Generate a stable cache key from metrics + policy + language.
+
+    v2 (REQ-1): verdict evidence participates in the result semantics
+    (EXCLUDE datasets must not hit a cached TRIM result), so the key is
+    namespaced with "v2-" and includes the verdict summary. Old v1 keys
+    can no longer collide with verdict-aware results. NOTE: no colon in
+    the prefix — colons are reserved characters on Windows and a
+    "v2:<hash>" filename silently fails to write there.
+    """
     ts_dict = temporal_sufficiency.to_dict()
     # Sort keys for stable hash
     payload = json.dumps(
-        {"policy": policy, "lang": lang, "ts": ts_dict},
+        {"policy": policy, "lang": lang, "ts": ts_dict, "vs": verdict_summary or {}},
         sort_keys=True,
         default=str,
     )
-    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
+    return f"v2-{digest}"
 
 
 def _cache_path(key: str) -> Path:
@@ -119,26 +138,37 @@ def compute_local_metrics(
     total_episodes: int,
     total_frames: int,
     progress_callback=None,
-) -> Tuple[DatasetTemporalSufficiency, List[TemporalSufficiency]]:
+    preflight: Optional[PreflightAuditor] = None,
+) -> Tuple[DatasetTemporalSufficiency, List[TemporalSufficiency], Optional[PreflightSummary]]:
     """Compute temporal sufficiency metrics locally.
 
     This is the heavy lifting that stays on the client side.
     The result is a small aggregated dict that gets sent to the API.
+
+    REQ-1: when ``preflight`` is provided, the deterministic CRITICAL
+    metrics are re-evaluated in the SAME pass (episodes_iter is a
+    single-use generator — a second traversal would double load time).
 
     Args:
         episodes_iter: Iterator yielding EpisodeData objects.
         total_episodes: Total number of episodes.
         total_frames: Total number of frames.
         progress_callback: Optional callback(step, total, message).
+        preflight: Optional PreflightAuditor; when given, per-episode
+            verdict evidence is collected and aggregated.
 
     Returns:
-        Tuple of (aggregated_dataset_metrics, per_episode_list).
+        Tuple of (aggregated_dataset_metrics, per_episode_list,
+        preflight_summary_or_None).
     """
     per_episode: List[TemporalSufficiency] = []
+    verdicts = [] if preflight is not None else None
 
     for i, episode in enumerate(episodes_iter):
         ts = compute_temporal_sufficiency(episode)
         per_episode.append(ts)
+        if preflight is not None:
+            verdicts.append(preflight.evaluate(episode))
         if progress_callback is not None:
             progress_callback(i + 1, total_episodes, f"episode {episode.episode_index}")
 
@@ -148,7 +178,8 @@ def compute_local_metrics(
         total_frames=total_frames,
     )
 
-    return agg, per_episode
+    summary = aggregate_preflight(verdicts) if verdicts is not None else None
+    return agg, per_episode, summary
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +192,7 @@ def _call_api(
     episode_count: int,
     total_frames: int,
     lang: str = "zh",
+    verdict_summary: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Call the remote recommendation API.
 
@@ -185,14 +217,19 @@ def _call_api(
     resp = requests.post(
         f"{api_url}/api/v1/recommend",
         json={
+            "contract_version": CONTRACT_VERSION,
             "policy": policy,
             "temporal_sufficiency": ts_dict,
             "episode_count": episode_count,
             "total_frames": total_frames,
             "lang": lang,
+            # REQ-1: verdict evidence from the client-side preflight
+            # pass. v1 servers ignore unknown keys; v2 servers gate
+            # TRIM suggestions on this.
+            "verdict_summary": verdict_summary or {},
         },
         timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": f"rda-cli/0.5.0"},
+        headers={"User-Agent": f"rda-cli/0.5.9"},
     )
 
     if resp.status_code == 429:
@@ -276,16 +313,20 @@ def run_recommendation(
     policy_name = "frame-wise" if target_policy == TargetPolicy.FRAME_WISE else "temporal"
     lang = lang if lang in ("zh", "en") else "zh"
 
-    # Step 1: Compute metrics locally
+    # Step 1: Compute metrics locally (temporal sufficiency + REQ-1
+    # preflight verdicts in a single pass over the episode stream).
     if progress_callback:
         progress_callback(0, total_episodes, "Computing temporal sufficiency metrics...")
 
-    agg, _ = compute_local_metrics(
+    preflight = PreflightAuditor()
+    agg, _, verdict_summary = compute_local_metrics(
         episodes_iter,
         total_episodes=total_episodes,
         total_frames=total_frames,
         progress_callback=progress_callback,
+        preflight=preflight,
     )
+    verdict_payload = verdict_summary.to_dict() if verdict_summary else {}
 
     # Explicit offline mode: never touch the network, straight to fallback
     if offline:
@@ -295,10 +336,11 @@ def run_recommendation(
             "(rules not evaluated server-side).",
             err=True,
         )
-        return build_offline_result(agg, target_policy, lang=lang)
+        result = build_offline_result(agg, target_policy, lang=lang)
+        return gate_result_by_verdict(result, verdict_summary, lang=lang)
 
-    # Step 2: Check cache
-    key = _cache_key(agg, policy_name, lang)
+    # Step 2: Check cache (v2 keys include verdict evidence)
+    key = _cache_key(agg, policy_name, lang, verdict_payload)
     cached = _read_cache(key)
 
     # Step 3: Try API
@@ -312,6 +354,7 @@ def run_recommendation(
             episode_count=total_episodes,
             total_frames=total_frames,
             lang=lang,
+            verdict_summary=verdict_payload,
         )
     except ImportError as e:
         api_error = str(e)
@@ -328,7 +371,8 @@ def run_recommendation(
             **api_result,
             "temporal_sufficiency": agg.to_dict(),
         }
-        return RecommendationResult.from_dict(full_data)
+        result = RecommendationResult.from_dict(full_data)
+        return gate_result_by_verdict(result, verdict_summary, lang=lang)
 
     # API failed — try cache
     if cached is not None:
@@ -343,7 +387,8 @@ def run_recommendation(
             **cached,
             "temporal_sufficiency": agg.to_dict(),
         }
-        return RecommendationResult.from_dict(full_data)
+        result = RecommendationResult.from_dict(full_data)
+        return gate_result_by_verdict(result, verdict_summary, lang=lang)
 
     # No cache, no API — conservative local fallback instead of a hard error.
     # The metrics (heavy lifting) are already computed client-side; grading
@@ -358,4 +403,5 @@ def run_recommendation(
         "server-side evaluation.",
         err=True,
     )
-    return build_offline_result(agg, target_policy, lang=lang)
+    result = build_offline_result(agg, target_policy, lang=lang)
+    return gate_result_by_verdict(result, verdict_summary, lang=lang)

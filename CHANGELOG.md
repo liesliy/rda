@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.9 - 2026-09-05
+
+### Added
+
+- **REQ-1: verdict-gated recommendations.** Audit verdicts now enter the recommendation chain: `rda recommend` re-evaluates the five deterministic CRITICAL metrics (missing/dropout, NaN/Inf, schema, timestamp validity, joint limits) in the same single pass as the temporal metrics (zero extra dataset traversal, near-zero cost), and any episode failure suppresses all pruning advice. The dataset receives a single `REPAIR_FIRST` recommendation instead, citing per-episode evidence (episode index, failed metrics) and a damage class: `INVALID` (NaN/Inf, broken time axis — irrecoverable at audit time) vs `REPAIRABLE` (frame loss, schema mismatch, joint excursion — fixable by trimming/re-export). This holds on ALL result paths: server response, cache, and offline fallback (client-side final gate), so the guarantee is independent of server upgrade order. New module `rda/recommend/preflight.py`; API payload carries `contract_version: 2` + `verdict_summary` (aggregates only, <1KB — privacy posture unchanged); server rules v0.6.0/engine v3 grade the same gate; v1 clients and servers are fully unaffected.
+- `RecommendationResult.verdict_summary` field: JSON reports now embed the verdict evidence (`exclude_count`, `dominant_reason_code`, `excluded_episodes[]` with `reason_code`/`failed_metrics`) next to the REPAIR_FIRST recommendation.
+- Regression coverage: `tests/test_preflight.py` (17 tests) — per-episode verdict classification (NaN → INVALID, dropout → REPAIRABLE, 0-frame guard), aggregation with INVALID-dominates-REPAIRABLE, payload size budget (<1KB for 200+ episodes), the gate itself (TRIM blocked on excluded datasets, passthrough on healthy, zh/en copy), single-pass integration, and cache-key namespacing.
+
+### Fixed
+
+- Windows cache-write failure: the v2 cache-key namespace originally used a colon (`v2:<hash>`), which is a reserved character on Windows — cache writes silently produced 0-byte files. The namespace is now `v2-<hash>`; old `v2:`-less (v1) cache entries simply age out via TTL.
+
 ## 0.5.8 - 2026-09-03
 
 ### Fixed

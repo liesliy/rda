@@ -117,6 +117,24 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
             ConfidenceLevel.NOT_RECOMMENDED: "[NOT_RECOMMENDED]",
         }.get(rec.confidence, rec.confidence.value)
 
+        # REQ-1: REPAIR_FIRST is a verdict gate, not a normal
+        # recommendation — render it as a warning block.
+        if rec.action.value == "REPAIR_FIRST":
+            lines.append("  " + "!" * 56)
+            if lang == "zh":
+                lines.append("  ⚠ 数据预检未通过 — 已抑制全部剪枝建议")
+            else:
+                lines.append("  ⚠ DATA PREFLIGHT FAILED — all pruning advice suppressed")
+            lines.append("  " + "!" * 56)
+            lines.append(f"  {conf_mark} {rec.title}")
+            lines.append(f"         {rec.summary}")
+            lines.append("")
+            if rec.details:
+                for detail in rec.details:
+                    lines.append(f"       - {detail}")
+            lines.append("")
+            continue
+
         if lang == "zh":
             lines.append(f"  {rec_word} {i}: {conf_mark} {rec.title}")
         else:

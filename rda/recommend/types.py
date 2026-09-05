@@ -27,6 +27,11 @@ class RecommendationAction(str, Enum):
     DO_NOT_PRUNE = "DO_NOT_PRUNE"
     DO_NOT_PRUNE_AGGRESSIVELY = "DO_NOT_PRUNE_AGGRESSIVELY"
     NO_RECOMMENDATION = "NO_RECOMMENDATION"
+    # REQ-1 (v0.5.9): emitted when the preflight verdict evidence shows
+    # structurally broken episodes. Repair must precede optimization;
+    # all TRIM_* suggestions are suppressed. Older clients that receive
+    # this value degrade to NO_RECOMMENDATION via from_dict (safe).
+    REPAIR_FIRST = "REPAIR_FIRST"
 
 
 class ConfidenceLevel(str, Enum):
@@ -121,15 +126,21 @@ class RecommendationResult:
     recommendations: List[Recommendation] = field(default_factory=list)
     rules_version: str = ""
     engine_version: str = ""
+    # REQ-1: verdict evidence attached by the client-side gate when the
+    # dataset has excluded episodes. Absent (None) for healthy datasets.
+    verdict_summary: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "target_policy": self.target_policy.value,
             "temporal_sufficiency": self.temporal_sufficiency.to_dict(),
             "recommendations": [r.to_dict() for r in self.recommendations],
             "rules_version": self.rules_version,
             "engine_version": self.engine_version,
         }
+        if self.verdict_summary is not None:
+            d["verdict_summary"] = self.verdict_summary
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RecommendationResult":
@@ -172,6 +183,7 @@ class RecommendationResult:
             recommendations=recs,
             rules_version=data.get("rules_version", ""),
             engine_version=data.get("engine_version", ""),
+            verdict_summary=data.get("verdict_summary"),
         )
 
 
