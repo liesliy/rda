@@ -28,3 +28,4 @@ rda_report.json
 # OS
 .DS_Store
 Thumbs.db
+benchmarks/results/
