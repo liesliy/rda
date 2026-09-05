@@ -41,6 +41,12 @@ from rda.metrics.motion import (
 )
 from rda.metrics.distribution import DistributionMetric, CoverageMetric
 from rda.metrics.video_integrity import VideoFrameIntegrityMetric
+from rda.metrics.visual_integrity import (
+    VideoFreezeMetric,
+    VideoStreamSyncMetric,
+    VideoTimestampAlignmentMetric,
+)
+from rda.metrics.visual_quality import VisualQualityMetric
 
 # ---------------------------------------------------------------------------
 # Architectural Layer classification (how the metric works)
@@ -53,8 +59,16 @@ LAYER1_INTEGRITY: List[Type[MetricBase]] = [
     TimestampValidityMetric,
     JointLimitMetric,
     VideoFrameIntegrityMetric,
+    VideoFreezeMetric,
+    VideoTimestampAlignmentMetric,
+    VideoStreamSyncMetric,
 ]
-"""Layer 1 — Data Integrity: deterministic hard checks (pass/exclude)."""
+"""Layer 1 — Data Integrity: deterministic hard checks (pass/exclude).
+
+REQ-4 (v0.7.0) adds the VA-A visual-stream integrity trio: freeze
+detection, video/parquet timestamp alignment, and multi-camera stream
+presence/sync.
+"""
 
 LAYER2_TEMPORAL_MOTION: List[Type[MetricBase]] = [
     SensorSyncMetric,
@@ -62,8 +76,12 @@ LAYER2_TEMPORAL_MOTION: List[Type[MetricBase]] = [
     VelocityMetric,
     ActionDiscontinuityMetric,
     TemporalSufficiencyMetric,
+    VisualQualityMetric,
 ]
-"""Layer 2 — Temporal & Motion Anomaly: observational measurements."""
+"""Layer 2 — Temporal & Motion Anomaly: observational measurements.
+
+REQ-4 (v0.7.0) adds VA-B (``visual_quality``) here: blur/exposure/
+contrast are physical measurements, REVIEW-grade, never a veto."""
 
 LAYER3_DATASET_UTILITY: List[Type[MetricBase]] = [
     IdleRatioMetric,
@@ -73,7 +91,9 @@ LAYER3_DATASET_UTILITY: List[Type[MetricBase]] = [
 """Layer 3 — Dataset Utility: training data efficiency and coverage."""
 
 ALL_METRICS: List[Type[MetricBase]] = LAYER1_INTEGRITY + LAYER2_TEMPORAL_MOTION + LAYER3_DATASET_UTILITY
-"""All 12 metric classes, in architectural layer order."""
+"""All metric classes, in architectural layer order.
+
+v0.7.0 (REQ-4): grew from 14 to 18 with the VA-A trio + VA-B."""
 
 # ---------------------------------------------------------------------------
 # Portability Tier classification (per MVP Spec v0.2.0 §1.5)
@@ -134,12 +154,16 @@ __all__ = [
     "TimestampValidityMetric",
     "JointLimitMetric",
     "VideoFrameIntegrityMetric",
+    "VideoFreezeMetric",
+    "VideoTimestampAlignmentMetric",
+    "VideoStreamSyncMetric",
     # Metric classes — Layer 2 (Temporal & Motion)
     "SensorSyncMetric",
     "JitterMetric",
     "VelocityMetric",
     "ActionDiscontinuityMetric",
     "TemporalSufficiencyMetric",
+    "VisualQualityMetric",
     # Metric classes — Layer 3 (Dataset Utility)
     "IdleRatioMetric",
     "DistributionMetric",

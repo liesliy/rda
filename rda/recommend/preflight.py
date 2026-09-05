@@ -70,6 +70,13 @@ REASON_CODE_BY_METRIC: Dict[str, str] = {
     "missing_dropout": "REPAIRABLE",
     "schema_consistency": "REPAIRABLE",
     "joint_limit": "REPAIRABLE",
+    # REQ-4 (v0.7.0) VA-A: camera drop-out and missing camera streams are
+    # re-acquisition problems for the affected spans — treat as REPAIRABLE
+    # (re-record) rather than INVALID; timeline misalignment likewise
+    # (re-export from source).
+    "video_freeze": "REPAIRABLE",
+    "video_stream_sync": "REPAIRABLE",
+    "video_timestamp_alignment": "REPAIRABLE",
 }
 
 
@@ -161,7 +168,7 @@ class PreflightAuditor:
     pipeline) — a broken metric must never abort a recommendation run.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, include_visual: bool = False) -> None:
         self._metric_instances = {
             "missing_dropout": MissingFramesMetric(),
             "invalid_values": NaNInfMetric(),
@@ -169,14 +176,38 @@ class PreflightAuditor:
             "timestamp_validity": TimestampValidityMetric(),
             "joint_limit": JointLimitMetric(),
         }
+        # REQ-4 (v0.7.0): VA-A visual-stream integrity checks decode
+        # video (64×64 gray spans). Off by default in preflight — the
+        # recommend pass must stay cheap on video-heavy datasets; the
+        # audit pass always runs them. ``include_visual=True`` opts in
+        # (e.g. explicit visual-audit recommendation runs).
+        self._preflight_names = list(PREFLIGHT_METRIC_NAMES)
+        if include_visual:
+            from rda.metrics.visual_integrity import (
+                VideoFreezeMetric,
+                VideoStreamSyncMetric,
+                VideoTimestampAlignmentMetric,
+            )
+            self._metric_instances.update({
+                "video_freeze": VideoFreezeMetric(),
+                "video_timestamp_alignment": VideoTimestampAlignmentMetric(),
+                "video_stream_sync": VideoStreamSyncMetric(),
+            })
+        else:
+            self._preflight_names = [
+                n for n in self._preflight_names
+                if not n.startswith("video_") or n == "video_frame_integrity"
+            ]
 
     def evaluate(self, episode) -> EpisodeVerdictSummary:
         """Evaluate one episode against the CRITICAL checks."""
         failed: List[str] = []
         zero_frames = episode.num_frames == 0
 
-        for name in PREFLIGHT_METRIC_NAMES:
-            metric = self._metric_instances[name]
+        for name in self._preflight_names:
+            metric = self._metric_instances.get(name)
+            if metric is None:
+                continue
             try:
                 result = metric.compute(episode)
             except Exception:

@@ -34,16 +34,29 @@ class AuditVerdict(str, Enum):
 # - schema_consistency: shape/dtype mismatch across features
 # - timestamp_validity: non-monotonic or negative deltas (time broken)
 # - joint_limit:      joints outside mechanical limits (physical impossibility)
+# - video_freeze (v0.7.0 REQ-4): camera drop-out signature — identical
+#   video frames while the arm moves; the visual modality is provably
+#   absent for those spans.
+# - video_timestamp_alignment (v0.7.0 REQ-4): video/parquet timeline
+#   spans diverge beyond hard tolerance; frame-index training would
+#   silently sample misaligned moments.
+# - video_stream_sync (v0.7.0 REQ-4): a referenced camera stream is
+#   missing/unresolvable or spans diverge — silent modality loss.
 CRITICAL_METRICS: List[str] = [
     "missing_dropout",
     "invalid_values",
     "schema_consistency",
     "timestamp_validity",
     "joint_limit",
+    "video_freeze",
+    "video_timestamp_alignment",
+    "video_stream_sync",
 ]
 
 # Metric names that trigger REVIEW on failure (but not EXCLUDE).
 # These are statistical anomalies — unusual but not definitively broken.
+# - visual_quality (v0.7.0 REQ-4 VA-B): blur/exposure/contrast are
+#   physical measurements; low scores warrant a human look, never a veto.
 REVIEW_METRICS: List[str] = [
     "sensor_synchronization",
     "sampling_jitter",
@@ -52,6 +65,7 @@ REVIEW_METRICS: List[str] = [
     "idle_ratio",
     "distribution",
     "coverage",
+    "visual_quality",
 ]
 
 

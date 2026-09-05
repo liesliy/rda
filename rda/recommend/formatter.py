@@ -144,11 +144,29 @@ def format_recommendation_text(result: RecommendationResult, lang: str = "zh") -
             lines.append("")
             continue
 
-        # REQ-3/REQ-2 (v0.6.0): review-type actions render with a
+        # REQ-4 (v0.7.0): VISUAL_REPAIR_FIRST is a hard-evidence gate
+        # (like REPAIR_FIRST but for the visual modality) — warning block.
+        if rec.action.value == "VISUAL_REPAIR_FIRST":
+            lines.append("  " + "!" * 56)
+            if lang == "zh":
+                lines.append("  ⚠ 视觉流完整性校验未通过 — 视觉模态已损坏")
+            else:
+                lines.append("  ⚠ VISUAL INTEGRITY FAILED — visual modality corrupted")
+            lines.append("  " + "!" * 56)
+            lines.append(f"  {conf_mark} {rec.title}")
+            lines.append(f"         {rec.summary}")
+            lines.append("")
+            if rec.details:
+                for detail in rec.details:
+                    lines.append(f"       - {detail}")
+            lines.append("")
+            continue
+
+        # REQ-3/REQ-2/REQ-4 (v0.6.0+): review-type actions render with a
         # "human review" marker instead of the generic layout.
         if rec.action.value in (
             "DISCARD_STATIC", "SMOOTHING_REVIEW", "CALIBRATION_CHECK",
-            "COVERAGE_SUGGESTION",
+            "COVERAGE_SUGGESTION", "VISUAL_QUALITY_REVIEW",
         ):
             lines.append(f"  {rec_word} {i}: {conf_mark} {rec.title}")
             lines.append(f"         {rec.summary}")

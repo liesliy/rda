@@ -29,7 +29,7 @@ pip install robot-data-audit
 ## Quick start
 
 ```bash
-# 1. Audit a dataset — 13 metrics, three-tier verdicts (PASS / REVIEW / EXCLUDE)
+# 1. Audit a dataset — 18 metrics incl. visual-stream integrity, three-tier verdicts (PASS / REVIEW / EXCLUDE)
 rda audit /path/to/lerobot/dataset
 
 # 2. Recommendations calibrated to your model type
@@ -65,7 +65,7 @@ More: [CLI reference & metrics table](docs/cli.md) · [experiments](experiments/
 
 ## Metric provenance
 
-Every metric ships with a four-file provenance record (`docs/provenance/<metric>/`): **algorithm.md** (how it works), **source.md** (public precedents consulted — ideas only), **implementation_origin.md** (original implementation, zero third-party code), **license.md** (compliance notes). Covered: all 12 metrics (`missing_dropout`, `invalid_values`, `schema_consistency`, `timestamp_validity`, `joint_limit`, `video_frame_integrity`, `sensor_synchronization`, `sampling_jitter`, `velocity_acceleration`, `action_discontinuity`, `temporal_sufficiency`, `idle_ratio`, `distribution`, `coverage`). Index: [docs/provenance/](docs/provenance/).
+Every metric ships with a four-file provenance record (`docs/provenance/<metric>/`): **algorithm.md** (how it works), **source.md** (public precedents consulted — ideas only), **implementation_origin.md** (original implementation, zero third-party code), **license.md** (compliance notes). Covered: all 18 metrics (`missing_dropout`, `invalid_values`, `schema_consistency`, `timestamp_validity`, `joint_limit`, `video_frame_integrity`, `video_freeze`, `video_timestamp_alignment`, `video_stream_sync`, `visual_quality`, `sensor_synchronization`, `sampling_jitter`, `velocity_acceleration`, `action_discontinuity`, `temporal_sufficiency`, `idle_ratio`, `distribution`, `coverage`). Index: [docs/provenance/](docs/provenance/).
 
 ## Citation
 

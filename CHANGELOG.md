@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 - 2026-09-05
+
+### Added
+
+- **REQ-4: visual-stream audit — VA-A integrity trio + VA-B quality measurement.** RDA now audits the visual modality with the same hard-evidence discipline as the kinematics:
+  - `video_freeze` (EXCLUDE-grade): detects camera drop-out — consecutive codec-identical video frames while the arm is moving. Decodes 64×64 grayscale spans via PyAV; frozen detection uses an adaptive epsilon (`max(0.10, 0.25 × p10` of frame diffs`)`) calibrated on libero_10 so slow motion is not misclassified as a stall. A single brief freeze is REVIEW; conclusive corruption requires repeated spans, a ≥3 s stall, or ≥30% frozen time.
+  - `video_timestamp_alignment` (EXCLUDE beyond 10% drift, REVIEW 2–10%): compares the chunk-video time span against the parquet timeline, catching systematic video/state misalignment that frame-count checks miss.
+  - `video_stream_sync` (EXCLUDE): all referenced camera streams must resolve (a missing wrist camera is silent modality loss) and multi-camera spans must agree.
+  - `visual_quality` (REVIEW-grade, never a veto — VA-B): blur (Laplacian variance), exposure (dark/blown-out bands), and contrast (P5–P95) on 10 uniformly sampled frames; aggregates as `max(blur, exposure)` per SLE, reports the worst-frame timestamp for direct human review. Thresholds are SLE-derived priors, calibrated on healthy data (penalty 0.00 on libero_10) — calibrate per camera before treating them as gates.
+- **Server engine v5 (rules 0.8.0)**: new `VISUAL_REPAIR_FIRST` (HIGH) and `VISUAL_QUALITY_REVIEW` (EXPERIMENTAL) recommendations driven by an extended `audit_signals.visual_summary` (whitelisted, bounded). v1–v3 clients and payloads behave exactly as before; new actions degrade to `NO_RECOMMENDATION` on old clients via `from_dict` (safe).
+- Metric provenance extended: all four new metrics ship the four-file record (`docs/provenance/<metric>/`), 18 metrics × 4 files.
+
+### Fixed
+
+- `VisualQualityMetric` and alignment metric now read `episode.timestamps` (the canonical field name) — verified against the schema dataclass.
+
 ## 0.6.0 - 2026-09-05
 
 ### Added

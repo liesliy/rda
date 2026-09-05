@@ -174,6 +174,10 @@ _EVIDENCE_LEVEL_BY_METRIC: Dict[str, str] = {
     "timestamp_validity": "HARD_FAIL",
     "joint_limit": "HARD_FAIL",
     "video_frame_integrity": "HARD_FAIL",
+    # REQ-4 (v0.7.0) VA-A: visual-stream integrity is hard evidence
+    "video_freeze": "HARD_FAIL",
+    "video_timestamp_alignment": "HARD_FAIL",
+    "video_stream_sync": "HARD_FAIL",
     "sensor_synchronization": "UNVERIFIABLE",
     "sampling_jitter": "RISK_SIGNAL",
     "velocity_acceleration": "RISK_SIGNAL",
@@ -181,6 +185,8 @@ _EVIDENCE_LEVEL_BY_METRIC: Dict[str, str] = {
     "idle_ratio": "RISK_SIGNAL",
     "distribution": "RISK_SIGNAL",
     "coverage": "RISK_SIGNAL",
+    # REQ-4 (v0.7.0) VA-B: visual quality is a measurement, never a veto
+    "visual_quality": "RISK_SIGNAL",
 }
 
 
@@ -242,6 +248,10 @@ def _issue_code_for_metric(metric_name: str) -> str:
         "timestamp_validity": "INT-04",
         "joint_limit": "INT-05",
         "video_frame_integrity": "INT-06",
+        # REQ-4 (v0.7.0) VA-A visual-stream integrity trio
+        "video_freeze": "INT-07",
+        "video_timestamp_alignment": "INT-08",
+        "video_stream_sync": "INT-09",
         "sensor_synchronization": "TMP-03",
         "sampling_jitter": "TMP-03",
         "action_discontinuity": "MOT-01",
@@ -249,6 +259,8 @@ def _issue_code_for_metric(metric_name: str) -> str:
         "idle_ratio": "MOT-03",
         "distribution": "DIS-01",
         "coverage": "DIS-03",
+        # REQ-4 (v0.7.0) VA-B visual quality (measurement, REVIEW-grade)
+        "visual_quality": "VIS-01",
     }
     return mapping.get(metric_name, "UNK-00")
 

@@ -47,6 +47,15 @@ class RecommendationAction(str, Enum):
     # REQ-2 (v0.6.0): state-space occupancy below the dataset's own
     # distribution quantiles — consider richer coverage in collection.
     COVERAGE_SUGGESTION = "COVERAGE_SUGGESTION"
+    # REQ-4 (v0.7.0): dataset contains episodes with PROVEN visual-stream
+    # corruption (camera freeze while moving, missing camera stream, or
+    # video/parquet timeline mismatch). Repair-first framing; older
+    # clients degrade to NO_RECOMMENDATION via from_dict (safe).
+    VISUAL_REPAIR_FIRST = "VISUAL_REPAIR_FIRST"
+    # REQ-4 (v0.7.0): episodes with a VA-B visual-quality penalty
+    # (blur/exposure/contrast) — measurement-level review hint, never a
+    # deletion suggestion. Degrades safely on older clients.
+    VISUAL_QUALITY_REVIEW = "VISUAL_QUALITY_REVIEW"
 
 
 class ConfidenceLevel(str, Enum):
