@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.7.1 - 2026-09-05
+
+### Added (REQ-10 — visual detection calibration closure)
+- `benchmarks/visual_inject.py`: corruption-injection benchmark — five
+  visual corruption families (blur gradient, dark, blown-out, freeze
+  spans, static camera) re-encoded onto real episodes; produces
+  per-scenario detection tables. Calibration run (libero_10 × 5
+  episodes × 11 scenarios): all acceptance checks passed, including
+  both boundary cases (majority-frozen episode and fully static camera
+  — the adaptive epsilon does not desensitize).
+- `visual_quality`: highlight-clipping detection (`clipped_frac`,
+  fraction of pixels ≥ 250; ≥ 20% → blown-out). Calibration finding:
+  mean luminance alone misses saturation on dark scenes (×3 gain clips
+  22–33% of pixels while mean stays ≈ 180, under the 230 band).
+- Multi-dataset threshold check (libero_10 / jaco_play / xarm_lift):
+  penalty p50 = 0.00 everywhere; jaco_play shows expected REVIEW
+  signals on genuinely blurred episodes (blur_var p10 = 61.5 vs xarm
+  464.6). Thresholds hold across resolutions.
+- Decode performance numbers (README): freeze ≈ 0.11 s/episode,
+  quality ≈ 0.17 s/episode (worst ≈ 0.17 s) on 10k-frame 224×224
+  chunk files.
+
+### Added (REQ-11 — optional-dependency UX)
+- Visual metrics grade NA with reason `video_deps_missing` when PyAV is
+  absent ("not audited", never "pass").
+- JSON report: top-level `skipped_by_missing_dep` counts (e.g.
+  `{"av": 12}`); CLI prints a warning with the install hint.
+- `[video]` extra (`pip install robot-data-audit[video]`); README
+  dependency-tier table.
+
+### Added (UI catch-up)
+- `7_Recommend.py`: policy_chunk_size input (CLI had it since 0.6.0)
+  and icons for the visual / advice actions.
+
+### Tests
+- 9 new tests (REQ-10 detection anchors + REQ-11 semantics);
+  122 passed, 2 skipped, zero regressions.
+
 ## 0.7.0 - 2026-09-05
 
 ### Added

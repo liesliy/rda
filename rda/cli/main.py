@@ -230,6 +230,19 @@ def audit(
             _json.dumps(report_dict, indent=2, default=str)
         )
 
+    # --- REQ-11 (v0.7.1): surface skipped-by-missing-dependency metrics ------
+    skipped = report_dict.get("skipped_by_missing_dep") or {}
+    if skipped:
+        dep_desc = ", ".join(
+            f"{n} metric-result(s) skipped (missing '{dep}')"
+            for dep, n in sorted(skipped.items())
+        )
+        click.echo(
+            f"Warning: {dep_desc}. Those checks were NOT performed — "
+            f"install with: pip install {' '.join(sorted(skipped.keys()))}",
+            err=True,
+        )
+
     # --- Save JSON report ---------------------------------------------------
     if output is None:
         if blind:

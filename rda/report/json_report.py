@@ -122,10 +122,31 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
         },
         "hero_metrics": hero_metrics,
         "top_observations": top_obs,
+        # REQ-11 (v0.7.1): metrics that could not run because an optional
+        # dependency is absent. "Not checked" must be visible at the top
+        # level — a missing key would read as "checked and fine".
+        "skipped_by_missing_dep": _skipped_by_missing_dep(result),
         "episodes": episodes,
     }
 
     return report
+
+
+def _skipped_by_missing_dep(result: DatasetAuditResult) -> Dict[str, int]:
+    """Count metrics graded NA with a ``*_deps_missing`` reason code.
+
+    Returns e.g. ``{"av": 12}`` — PyAV missing, 12 episode-metric slots
+    skipped. Empty dict when every metric ran.
+    """
+    dep_by_reason = {"video_deps_missing": "av"}
+    counts: Dict[str, int] = {}
+    for ep in result.episodes.values():
+        for metric_result in ep.metric_results.values():
+            reason = (metric_result.assessment or {}).get("reason")
+            dep = dep_by_reason.get(reason)
+            if dep:
+                counts[dep] = counts.get(dep, 0) + 1
+    return counts
 
 
 def format_json_report(result: DatasetAuditResult, indent: int = 2) -> str:

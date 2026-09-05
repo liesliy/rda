@@ -24,7 +24,18 @@ RDA audits robot manipulation datasets (LeRobot format) for integrity, temporal 
 pip install robot-data-audit
 ```
 
-`[lerobot]` adds `.parquet` dataset loading, `[ui]` adds the web dashboard.
+Optional dependency tiers:
+
+| Tier | Extra | Unlocks |
+|---|---|---|
+| Core (default) | — | parquet audits: integrity + temporal/motion + dataset-utility metrics |
+| Visual | `pip install robot-data-audit[video]` or `pip install av` | the 4 visual metrics (freeze / timestamp-alignment / stream-sync / quality) |
+| Lerobot | `[lerobot]` | `.parquet` dataset loading via the lerobot package |
+| UI | `[ui]` | the web dashboard |
+
+**Visual metrics without PyAV are reported as "not audited", never as
+"pass"**: the JSON report carries a top-level `skipped_by_missing_dep`
+field and the CLI prints a warning listing the skipped checks.
 
 ## Quick start
 

@@ -44,6 +44,13 @@ _DECODE_SIZE = 128              # decode at 128×128 gray (VA-B needs real textu
 _BLUR_VAR_FLOOR = 80.0          # Laplacian-variance normalization floor [SLE max_var]
 _DARK_MEAN = 50.0               # mean luminance below = dark [SLE]
 _BRIGHT_MEAN = 230.0            # mean luminance above = blown out
+_CLIPPED_FRAC = 0.20            # fraction of pixels >= 250 → blown out
+#   ^ REQ-10 calibration finding (v0.7.1): mean luminance alone misses
+#     highlight clipping on dark scenes — a ×3 gain on a mean-70 scene
+#     clips 22-33% of pixels to 255 while mean luminance stays ~180, far
+#     below the 230 band. The clipped-highlight fraction is the physical
+#     measure of "data destroyed by saturation"; 0.20 catches the mild
+#     clipping case (0.22-0.29 band) while clean scenes sit near 0.
 _CONTRAST_FLOOR = 20.0          # P95-P5 luminance below = low contrast
 _PENALTY_REVIEW = 0.5           # aggregate penalty >= this → REVIEW finding
 
@@ -101,6 +108,18 @@ class VisualQualityMetric(MetricBase):
         dataset_root = meta.get("dataset_root")
         fps = meta.get("fps")
 
+        from rda.metrics.visual_integrity import VIDEO_DEPS_MISSING, _av_missing
+
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message=(
+                    "PyAV is not installed — visual quality was NOT measured. "
+                    "Install it with: pip install av"
+                ),
+            )
+
         if not video_features:
             return MetricResult.make_na(
                 name=self.name,
@@ -156,6 +175,9 @@ class VisualQualityMetric(MetricBase):
                     "blur_var": round(blur_var, 2),
                     "mean_lum": round(mean_l, 1),
                     "contrast_p5_p95": round(p95 - p5, 1),
+                    "clipped_frac": round(
+                        float((frame >= 250).mean()), 3
+                    ),
                 })
 
             if samples:
@@ -227,7 +249,11 @@ def _aggregate_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     blur_penalty = 1.0 - min(med_blur / _BLUR_VAR_FLOOR, 1.0)
 
     dark_frac = float(np.mean([s["mean_lum"] < _DARK_MEAN for s in samples]))
-    bright_frac = float(np.mean([s["mean_lum"] > _BRIGHT_MEAN for s in samples]))
+    bright_frac = float(np.mean([
+        (s["mean_lum"] > _BRIGHT_MEAN)
+        or (s.get("clipped_frac", 0.0) >= _CLIPPED_FRAC)
+        for s in samples
+    ]))
     low_contrast_frac = float(
         np.mean([s["contrast_p5_p95"] < _CONTRAST_FLOOR for s in samples])
     )
@@ -248,6 +274,7 @@ def _aggregate_samples(samples: List[Dict[str, Any]]) -> Dict[str, Any]:
     worst_idx = int(np.argmin(blur_vars)) if dominant == "blur" else int(
         np.argmax([
             (s["mean_lum"] < _DARK_MEAN) or (s["mean_lum"] > _BRIGHT_MEAN)
+            or (s.get("clipped_frac", 0.0) >= _CLIPPED_FRAC)
             or (s["contrast_p5_p95"] < _CONTRAST_FLOOR)
             for s in samples
         ])
@@ -272,6 +299,8 @@ def _decode_one_gray(video_path: Path, at_sec: float, fps: float) -> Optional[np
     try:
         import av
     except ImportError:
+        # REQ-11: missing PyAV surfaces via the metric-level NA
+        # (video_deps_missing), not a silent empty measurement.
         return None
     try:
         with av.open(str(video_path)) as container:

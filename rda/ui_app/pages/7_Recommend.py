@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 
@@ -54,6 +55,25 @@ policy_label = st.radio(
 
 policy_name = policy_label.split(" — ")[0]
 
+# REQ: policy_chunk_size input (v0.7.1 UI catch-up; CLI had it since v0.6.0).
+_chunk_raw = st.text_input(
+    t("rec_chunk_label"),
+    value="",
+    help=t("rec_chunk_help"),
+    placeholder=t("rec_chunk_none"),
+)
+policy_chunk_size: Optional[int] = None
+_chunk_val = (_chunk_raw or "").strip()
+if _chunk_val:
+    try:
+        _cand = int(_chunk_val)
+        if 1 <= _cand <= 128:
+            policy_chunk_size = _cand
+        else:
+            st.warning(f"chunk size out of range (1-128): {_cand} — ignored")
+    except ValueError:
+        st.warning(f"invalid chunk size: {_chunk_val} — ignored")
+
 st.info(t("rec_privacy"), icon="🔒")
 
 # ---------------------------------------------------------------------------
@@ -83,6 +103,7 @@ if st.button(t("rec_run_btn"), type="primary", use_container_width=True):
                 total_frames=info.total_frames,
                 progress_callback=_progress,
                 lang=_lang,
+                policy_chunk_size=policy_chunk_size,
             )
 
         progress_bar.progress(1.0, text=t("rec_done"))
@@ -110,6 +131,14 @@ if st.button(t("rec_run_btn"), type="primary", use_container_width=True):
                 "DO_NOT_PRUNE_AGGRESSIVELY": "🟠",
                 "TRIM_INITIAL": "🟡",
                 "TRIM_IDLE_MILD": "🟢",
+                # v0.7.x visual actions (REQ-4/engine v5)
+                "VISUAL_REPAIR_FIRST": "🔴",
+                "VISUAL_QUALITY_REVIEW": "🟡",
+                # v0.6.0 advice actions
+                "DISCARD_STATIC": "🔴",
+                "SMOOTHING_REVIEW": "🟡",
+                "CALIBRATION_CHECK": "🟡",
+                "COVERAGE_SUGGESTION": "🟢",
             }.get(action_name, "⚪")
 
             with st.expander(

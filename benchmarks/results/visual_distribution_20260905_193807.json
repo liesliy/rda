@@ -1,0 +1,32 @@
+{
+ "libero_10": {
+  "n": 12,
+  "penalty_p50": 0.0,
+  "penalty_p90": 0.0,
+  "review_rate": 0.0,
+  "blur_var_p10": 259.379,
+  "blur_var_p50": 628.095,
+  "lum_p50": 77.345,
+  "contrast_p50": 139.13
+ },
+ "jaco_play": {
+  "n": 12,
+  "penalty_p50": 0.0015,
+  "penalty_p90": 0.4227000000000001,
+  "review_rate": 0.08333333333333333,
+  "blur_var_p10": 61.492,
+  "blur_var_p50": 356.545,
+  "lum_p50": 115.27,
+  "contrast_p50": 168.60000000000002
+ },
+ "xarm_lift": {
+  "n": 12,
+  "penalty_p50": 0.0,
+  "penalty_p90": 0.0,
+  "review_rate": 0.0,
+  "blur_var_p10": 464.63800000000003,
+  "blur_var_p50": 490.67999999999995,
+  "lum_p50": 110.07499999999999,
+  "contrast_p50": 208.85000000000002
+ }
+}

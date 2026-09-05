@@ -63,6 +63,23 @@ _MAX_FREEZE_REPORT = 8          # cap freeze regions in details (report size)
 _TS_SOFT_TOLERANCE = 0.02       # 2% span mismatch → review
 _TS_HARD_TOLERANCE = 0.10       # 10% span mismatch → exclude
 
+VIDEO_DEPS_MISSING = "video_deps_missing"
+"""NA reason code (REQ-11, v0.7.1): PyAV is not installed.
+
+Semantic contract: visual metrics graded NA with this reason mean the
+visual modality was NOT audited — "not checked", never "checked and
+fine". The CLI/JSON report aggregates these into
+``skipped_by_missing_dep`` so report readers see the gap explicitly.
+"""
+
+
+def _av_missing() -> bool:
+    try:
+        import av  # noqa: F401
+        return False
+    except ImportError:
+        return True
+
 
 @lru_cache(maxsize=256)
 def _decode_span_gray(
@@ -80,6 +97,9 @@ def _decode_span_gray(
     try:
         import av
     except ImportError:
+        # REQ-11 (v0.7.1): surface the missing optional dependency instead
+        # of silently degrading — callers distinguish "not checked" from
+        # "checked and fine" via this reason code.
         return None
 
     try:
@@ -197,6 +217,16 @@ class VideoFreezeMetric(MetricBase):
         video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
         dataset_root = meta.get("dataset_root")
         fps = meta.get("fps")
+
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message=(
+                    "PyAV is not installed — visual stream was NOT audited. "
+                    "Install it with: pip install av"
+                ),
+            )
 
         if not video_features:
             return MetricResult.make_na(
@@ -367,6 +397,16 @@ class VideoTimestampAlignmentMetric(MetricBase):
         video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
         fps = meta.get("fps")
 
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message=(
+                    "PyAV is not installed — visual stream was NOT audited. "
+                    "Install it with: pip install av"
+                ),
+            )
+
         if not video_features:
             return MetricResult.make_na(
                 name=self.name,
@@ -486,6 +526,16 @@ class VideoStreamSyncMetric(MetricBase):
         meta = episode.meta or {}
         video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
         dataset_root = meta.get("dataset_root")
+
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message=(
+                    "PyAV is not installed — visual stream was NOT audited. "
+                    "Install it with: pip install av"
+                ),
+            )
 
         if not video_features:
             return MetricResult.make_na(
