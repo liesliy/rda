@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 - 2026-09-05
+
+### Fixed
+- `skipped_by_missing_dep` crashed on real `DatasetAuditResult` shapes
+  (`EpisodeAuditResult` exposes `metrics`, not `metric_results`) — the
+  0.7.1 wheel shipped before this fix was caught in the post-upload
+  smoke test. 0.7.2 is the first wheel containing the corrected
+  attribute access. All 0.7.1 features otherwise unchanged.
+
 ## 0.7.1 - 2026-09-05
 
 ### Added (REQ-10 — visual detection calibration closure)
