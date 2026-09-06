@@ -1,6 +1,6 @@
 """RDA Streamlit UI — main app entry.
 
-7-page workflow:
+8-page workflow:
   1. Upload          load a dataset
   2. Audit           run the quality audit
   3. Health Overview dataset-level summary (landing page)
@@ -8,6 +8,7 @@
   5. Export          export reports / cleaned dataset
   6. History         audit trend tracking
   7. Recommend       optimization advice (rules API)
+  8. Acceptance      one-page acceptance evidence (REQ-5, v0.8.0)
 
 Navigation via st.navigation; audit state kept in st.session_state.
 UI language (zh/en) is selectable in the sidebar; the selector lives
@@ -90,10 +91,12 @@ episode_page = st.Page("pages/4_Episode_Explorer.py", title=t("nav_episode"), ic
 export_page = st.Page("pages/5_Export.py", title=t("nav_export"), icon="📥")
 history_page = st.Page("pages/6_History.py", title=t("nav_history"), icon="📈")
 recommend_page = st.Page("pages/7_Recommend.py", title=t("nav_recommend"), icon="🧭")
+# REQ-5 (v0.8.0): one-page acceptance evidence for the data-acceptance party.
+acceptance_page = st.Page("pages/8_Acceptance.py", title=t("nav_acceptance"), icon="📋")
 
 pg = st.navigation({
     t("nav_group_flow"): [upload_page, audit_page],
-    t("nav_group_results"): [health_page, episode_page, export_page],
+    t("nav_group_results"): [health_page, episode_page, export_page, acceptance_page],
     t("nav_group_recommend"): [recommend_page],
     t("nav_group_trend"): [history_page],
 })

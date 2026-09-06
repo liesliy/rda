@@ -42,6 +42,13 @@ Integrity section (checked / flagged / not-checked episode counts) while
 Episode Explorer gains a per-episode Visual Audit panel (freeze-region
 table, per-camera quality penalties, per-sample quality curves).
 
+**Acceptance summary (v0.8.0)**: `rda audit --format json` emits an
+`acceptance_summary` block — dataset-level P10/P50/P90 baselines,
+Tukey-IQR runtime outliers, the Tier-1 calibration layer and the
+not-checked inventory — and the dashboard adds an **Acceptance** page that
+presents it as one deliverable for the data-acceptance party. RDA measures
+and presents; the accept/reject decision stays with the human reviewer.
+
 ## Quick start
 
 ```bash

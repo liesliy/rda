@@ -26,6 +26,8 @@ from rda.metrics.base import MetricAvailability
 from rda.report.aggregation import aggregate_dataset_metrics
 from rda.report.summary import build_summary
 from rda.report.top_issues import compute_top_observations, compute_hero_metrics
+# REQ-5 (v0.8.0): dataset-level relative baselines + acceptance summary.
+from rda.report.acceptance import build_acceptance_summary
 
 
 # ---------------------------------------------------------------------------
@@ -80,9 +82,10 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
 
     Returns:
         A dict ready for JSON serialization with keys:
-        ``version``, ``dataset``, ``summary``,
-        ``three_layer_aggregates``, ``hero_metrics``,
-        ``top_observations``, ``episodes``.
+        ``report_schema_version``, ``tool_version``, ``dataset``,
+        ``summary``, ``three_layer_aggregates``, ``hero_metrics``,
+        ``top_observations``, ``skipped_by_missing_dep``,
+        ``acceptance_summary``, ``episodes``.
     """
     dataset_metrics = aggregate_dataset_metrics(result)
     top_obs = compute_top_observations(result, dataset_metrics=dataset_metrics)
@@ -126,13 +129,18 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
         # dependency is absent. "Not checked" must be visible at the top
         # level — a missing key would read as "checked and fine".
         "skipped_by_missing_dep": _skipped_by_missing_dep(result),
+        # REQ-5 (v0.8.0): same block as the product format, so CLI users
+        # get the acceptance deliverable without a second call.
+        "acceptance_summary": build_acceptance_summary(
+            result, not_checked=_skipped_by_missing_dep(result)
+        ),
         "episodes": episodes,
     }
 
     return report
 
 
-def _skipped_by_missing_dep(result: DatasetAuditResult) -> Dict[str, int]:
+def skipped_by_missing_dep(result: DatasetAuditResult) -> Dict[str, int]:
     """Count metrics graded NA with a ``*_deps_missing`` reason code.
 
     Returns e.g. ``{"av": 12}`` — PyAV missing, 12 episode-metric slots
@@ -150,6 +158,13 @@ def _skipped_by_missing_dep(result: DatasetAuditResult) -> Dict[str, int]:
             if dep:
                 counts[dep] = counts.get(dep, 0) + 1
     return counts
+
+
+# Backward-compatible private alias. The canonical name is now public
+# (``skipped_by_missing_dep``) because REQ-5 consumers — the acceptance
+# summary page and the JSON block — need it without reaching for a
+# private symbol. Existing tests import the underscore spelling.
+_skipped_by_missing_dep = skipped_by_missing_dep
 
 
 def format_json_report(result: DatasetAuditResult, indent: int = 2) -> str:
@@ -852,8 +867,9 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
 
     Produces a user-facing dataset summary with fields:
     ``dataset_id``, ``profile``, ``integrity``, ``quality``,
-    ``behavior_summary``, ``pattern_distribution``, and
-    ``estimated_post_cleanup_quality``.
+    ``behavior_summary``, ``pattern_distribution``,
+    ``estimated_post_cleanup_quality``, and — REQ-5 (v0.8.0) —
+    ``acceptance_summary``.
 
     Args:
         result: The dataset audit result.
@@ -915,6 +931,23 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
 
     from rda import __version__ as _rda_version
 
+    # REQ-5 (v0.8.0): the acceptance deliverable. Folds the quality block
+    # and the "not checked" map into one page so the data-acceptance party
+    # receives a single piece of evidence instead of assembling it from
+    # scattered keys.
+    quality_block = {
+        "dhi": dhi,
+        "grade": grade,
+        "training_readiness": readiness_level,
+        "training_readiness_detail": readiness_detail,
+        "dimensions": dimensions,
+    }
+    acceptance_summary = build_acceptance_summary(
+        result,
+        quality=quality_block,
+        not_checked=_skipped_by_missing_dep(result),
+    )
+
     return {
         "dataset_id": result.dataset_info.path,
         "tool_version": _rda_version,
@@ -949,6 +982,10 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
         "evidence_summary": evidence_summary,
         "pattern_distribution": pattern_dist,
         "estimated_post_cleanup_quality": post_cleanup_dhi,
+        # REQ-5 (v0.8.0): one-page acceptance evidence — relative P10/P50/P90
+        # baselines, Tukey-IQR runtime outliers, Tier-1 calibration context
+        # and an explicit "not checked" map.
+        "acceptance_summary": acceptance_summary,
     }
 
 

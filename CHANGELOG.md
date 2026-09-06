@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.8.0 - 2026-09-06
+
+### Added (REQ-5 — dataset-level relative baselines + acceptance summary)
+- `rda/report/acceptance.py` (new): dataset-level relative baselines.
+  - `tukey_fence` / `is_tukey_outlier` — episode-runtime outlier detection
+    using the Tukey fence `[Q1 - 1.5*IQR, Q3 + 1.5*IQR]`, ported from the
+    [SLE] reference implementation (`score_lerobot_episodes`
+    `is_time_outlier(mode="iqr")`). No threshold is invented here.
+  - `compute_percentile_baselines` — P10 / P50 / P90 (+ min / max) for the
+    Tier-1 portable metric set (`duration_sec`, `spike_count`,
+    `effective_motion_ratio`; rho = 0.960 vs the full metric set, see
+    `rda/calibration/portable.py`). Baselines are relative to the audited
+    population, not an absolute threshold borrowed from another platform.
+  - `build_acceptance_summary` — folds verdict distribution, percentile
+    baselines, runtime outliers, the calibration layer and the
+    not-checked inventory into one block.
+- `acceptance_summary` is emitted by **both** report formats: the engine
+  (CLI `--format json`) and the product/dataset report. `schema_version`
+  `1.0`.
+- UI: new page **8 · Acceptance** (`rda/ui_app/pages/8_Acceptance.py`) —
+  dataset identity, verdict distribution, quality layer, baseline table,
+  outlier table, not-checked inventory, calibration layer, and an export +
+  disclaimer section. Registered in `app.py` navigation.
+- i18n: 48 new bilingual (zh/en) `acc_*` keys plus `nav_acceptance`.
+- `skipped_by_missing_dep` is now a public function in `json_report`
+  (the private `_skipped_by_missing_dep` name is kept as an alias so
+  existing callers and tests keep working).
+
+### Red line honoured
+REQ-5 measures and presents; it does **not** adjudicate. The acceptance
+summary contains no accept/reject decision — that call belongs to the
+human reviewer. `test_acceptance_summary_does_not_adjudicate` pins this.
+
+### Degenerate-fence guard
+When every episode has the same duration, `IQR = 0` and the Tukey fence
+collapses to a single point. Reporting "0 outliers" there would read as
+"checked and clean" when the truth is "no spread to detect against" — the
+same class of trap as REQ-11's "not checked must not read as pass". The
+block now sets `degenerate: true` with an explicit note, and the UI shows
+a warning. Verified on aloha_insertion (50 episodes, all 9.98 s).
+
+### Fixed
+- **Test infrastructure silently faking green (pre-existing).**
+  `tests/test_i18n.py` and `tests/test_ui_visual_audit.py` injected a stub
+  `streamlit` module into `sys.modules` unconditionally, which broke
+  `streamlit.testing.v1` imports for the rest of the session — every
+  `AppTest` case was skipped instead of run. The stub now applies only
+  when the real streamlit is genuinely unavailable.
+- `tests/test_ui_visual_audit.py` never imported `DatasetAuditor`
+  (a `NameError` swallowed by a bare `except:`). Combined with the above,
+  **the REQ-4 UI page tests had never actually executed**. Now imported;
+  both cases run and pass.
+- `AppTest.from_file` does not put `rda/ui_app` on `sys.path` (unlike
+  `streamlit run`, where `app.py` handles it), so pages importing
+  `components.common` raised `ModuleNotFoundError`. Tests now insert the
+  directory explicitly. Diagnostics were also added to the previously
+  silent `except:` so skipped-for-missing-data is visible rather than
+  silent.
+- Version strings had drifted apart for two releases: `rda.__version__`
+  and the `rda-cli/<ver>` User-Agent both said 0.7.2 while
+  `pyproject.toml` said 0.7.3. All three are now 0.8.0, and
+  `tests/test_version_consistency.py` pins them together.
+
+### Tests
+- `tests/test_req5_acceptance_summary.py` (new, 14 cases): Tukey fence
+  arithmetic against hand-computed values, degenerate-fence branch,
+  unavailable metrics never counted as 0, outlier ordering/truncation,
+  no-adjudication guarantee, i18n key parity, and a Streamlit `AppTest`
+  end-to-end render of the new page.
+- `tests/test_version_consistency.py` (new, 2 cases).
+- Suite: 154 passed, 2 skipped (the 2 skips need a real LIBERO v3.0
+  dataset that is not present on this machine).
+
+### Measured on real datasets
+- libero_10 (379 episodes): 36 runtime outliers, fence `[16.5 s, 35.7 s]`,
+  p50 = 25.8 s, max = 50.4 s — all on the long side.
+- aloha_insertion (50 episodes): all durations 9.98 s → degenerate branch,
+  correctly flagged rather than reported as "0 outliers".
+
 ## 0.7.3 - 2026-09-05
 
 ### Added (v0.7.x UI catch-up + REQ-3②)

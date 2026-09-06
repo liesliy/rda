@@ -22,11 +22,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Inject a streamlit stub BEFORE importing the catalog (import-time only).
+# Only when the real package is genuinely absent — a fake ``streamlit``
+# left in sys.modules breaks ``streamlit.testing.v1`` for every later
+# test module in the same session, silently skipping AppTest page runs
+# and turning them into fake greens.
 if "streamlit" not in sys.modules:
-    _st = types.ModuleType("streamlit")
-    _st.session_state = {}
-    _st.radio = lambda *a, **k: None
-    sys.modules["streamlit"] = _st
+    try:
+        import streamlit as _real_streamlit  # noqa: F401
+    except ImportError:
+        _st = types.ModuleType("streamlit")
+        _st.session_state = {}
+        _st.radio = lambda *a, **k: None
+        sys.modules["streamlit"] = _st
 
 from rda.ui_app.i18n import DEFAULT_LANG, LANGS, STRINGS  # noqa: E402
 

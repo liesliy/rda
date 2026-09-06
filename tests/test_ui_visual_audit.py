@@ -22,17 +22,28 @@ import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Pages import ``components.common`` by bare name; ``streamlit run`` gets
+# that from app.py, AppTest.from_file does not, so put ui_app on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rda" / "ui_app"))
 
 # --- streamlit stub for the pure-function layer (import-time only) ---
+# Only stub when the real package is genuinely absent. Installing a fake
+# ``streamlit`` into sys.modules unconditionally poisons every later test
+# module in the same session: ``streamlit.testing.v1`` then fails to
+# import, so AppTest cases skip silently instead of actually running —
+# a fake green that hides real page regressions.
 if "streamlit" not in sys.modules:
-    _st = types.ModuleType("streamlit")
-    _st.session_state = {}
-    _st.radio = lambda *a, **k: None
-    sys.modules["streamlit"] = _st
+    try:
+        import streamlit as _real_streamlit  # noqa: F401
+    except ImportError:
+        _st = types.ModuleType("streamlit")
+        _st.session_state = {}
+        _st.radio = lambda *a, **k: None
+        sys.modules["streamlit"] = _st
 
 import pytest  # noqa: E402
 
-from rda.audit.dataset_audit import DatasetAuditResult  # noqa: E402
+from rda.audit.dataset_audit import DatasetAuditResult, DatasetAuditor  # noqa: E402
 from rda.io.schema import DatasetInfo  # noqa: E402
 from rda.metrics.base import MetricAvailability, MetricResult  # noqa: E402
 from rda.metrics.visual_integrity import VIDEO_DEPS_MISSING  # noqa: E402
@@ -167,7 +178,11 @@ def _load_real_dataset_or_none():
             eps.append(ep)
             info.total_frames += ep.num_frames
         return DatasetAuditor().audit_dataset(info, iter(eps))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # Surface the reason instead of swallowing it: a silent None here
+        # turns these cases into skips that look like "dataset absent"
+        # when the real cause may be a loader or audit regression.
+        print(f"[skip-diag] libero_10 load failed: {exc!r}")
         return None
 
 
