@@ -31,7 +31,7 @@ from rda.metrics.temporal import (
     TimestampValidityMetric,
     SensorSyncMetric,
     JitterMetric,
-    TemporalSufficiencyMetric,
+    TemporalStructureMetric,
 )
 from rda.metrics.motion import (
     JointLimitMetric,
@@ -77,7 +77,6 @@ LAYER2_TEMPORAL_MOTION: List[Type[MetricBase]] = [
     JitterMetric,
     VelocityMetric,
     ActionDiscontinuityMetric,
-    TemporalSufficiencyMetric,
     VisualQualityMetric,
     VideoStreamSpanConsistencyMetric,
     VideoStreamTemporalOffsetMetric,
@@ -93,8 +92,13 @@ LAYER3_DATASET_UTILITY: List[Type[MetricBase]] = [
     IdleRatioMetric,
     DistributionMetric,
     CoverageMetric,
+    TemporalStructureMetric,
 ]
-"""Layer 3 — Dataset Utility: training data efficiency and coverage."""
+"""Layer 3 — Dataset Utility: training data efficiency and coverage.
+
+v0.9: Added TemporalStructureMetric (renamed from TemporalSufficiencyMetric).
+Moved from L2 to L3 since it describes dataset-level temporal structure
+rather than per-episode motion anomalies."""
 
 ALL_METRICS: List[Type[MetricBase]] = LAYER1_INTEGRITY + LAYER2_TEMPORAL_MOTION + LAYER3_DATASET_UTILITY
 """All metric classes, in architectural layer order.
@@ -169,7 +173,6 @@ __all__ = [
     "JitterMetric",
     "VelocityMetric",
     "ActionDiscontinuityMetric",
-    "TemporalSufficiencyMetric",
     "VisualQualityMetric",
     "VideoStreamSpanConsistencyMetric",
     "VideoStreamTemporalOffsetMetric",
@@ -178,6 +181,9 @@ __all__ = [
     "IdleRatioMetric",
     "DistributionMetric",
     "CoverageMetric",
+    "TemporalStructureMetric",
+    # Backward compatibility alias (deprecated, use TemporalStructureMetric)
+    "TemporalSufficiencyMetric",
     # Architectural Layer classification
     "LAYER1_INTEGRITY",
     "LAYER2_TEMPORAL_MOTION",

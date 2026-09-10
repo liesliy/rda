@@ -103,7 +103,7 @@ REVIEW_METRICS: List[str] = DIAGNOSTIC_METRICS
 DATASET_PROFILE_METRICS: List[str] = [
     "distribution",             # Action/trajectory statistical distribution
     "coverage",                 # State-space occupancy analysis
-    "temporal_sufficiency",     # Temporal sufficiency / idle structure
+    "temporal_structure",       # Temporal structure / idle structure (renamed from temporal_sufficiency)
 ]
 
 

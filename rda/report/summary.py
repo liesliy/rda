@@ -209,8 +209,8 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
             "(RISK_SIGNAL: observational, not confirmed corruption)"
         )
 
-    # Temporal sufficiency
-    ts = temporal.get("temporal_sufficiency", {})
+    # Temporal structure (v0.9: renamed from temporal_sufficiency)
+    ts = temporal.get("temporal_structure", temporal.get("temporal_sufficiency", {}))
     if ts:
         ts_avail = ts.get("available_episodes", 0)
         if ts_avail > 0:
@@ -219,7 +219,7 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
             active_p50_med = ts.get("active_run_p50", {}).get("median", 0.0)
             vw10_med = ts.get("valid_window_ratio_10", {}).get("median", 0.0)
             lines.append(
-                f"  temporal_sufficiency     idle_total={idle_med:.1%}, "
+                f"  temporal_structure       idle_total={idle_med:.1%}, "
                 f"idle_prefix={prefix_med:.1%}, "
                 f"active_run_p50={active_p50_med:.0f}f, "
                 f"valid_window(seq=10)={vw10_med:.1%} "

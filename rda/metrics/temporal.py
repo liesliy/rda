@@ -356,19 +356,23 @@ class JitterMetric(MetricBase):
 
 
 # ---------------------------------------------------------------------------
-# Metric — Temporal Sufficiency
+# Metric — Temporal Structure (v0.9: renamed from TemporalSufficiency)
 # ---------------------------------------------------------------------------
 
-class TemporalSufficiencyMetric(MetricBase):
-    """Measure temporal sufficiency of action data for idle-frame pruning.
+class TemporalStructureMetric(MetricBase):
+    """Measure temporal structure of action data for idle-frame pruning.
 
     Computes per-episode idle structure metrics (idle prefix, active run
     distribution, valid window ratios) that indicate whether and how much
     idle-frame pruning is safe.
+
+    v0.9: Renamed from TemporalSufficiencyMetric to better reflect that
+    it describes the temporal structure of the data, not just sufficiency.
+    Now classified under Dataset Profile (L3) for dataset-level aggregation.
     """
 
-    name = "temporal_sufficiency"
-    description = "Measure temporal sufficiency: idle structure, active runs, and valid window ratios."
+    name = "temporal_structure"
+    description = "Measure temporal structure: idle structure, active runs, and valid window ratios."
 
     def compute(self, episode: EpisodeData) -> MetricResult:
         from rda.recommend.temporal_metrics import compute_temporal_sufficiency
@@ -380,7 +384,7 @@ class TemporalSufficiencyMetric(MetricBase):
             return MetricResult.make_na(
                 name=self.name,
                 reason="no_usable_action_data",
-                message="Temporal sufficiency: N/A (no usable action data).",
+                message="Temporal structure: N/A (no usable action data).",
             )
 
         ts_dict = ts.to_dict()
@@ -400,7 +404,7 @@ class TemporalSufficiencyMetric(MetricBase):
         }
 
         msg = (
-            f"Temporal sufficiency: idle_total={ts.idle_total_ratio:.1%}, "
+            f"Temporal structure: idle_total={ts.idle_total_ratio:.1%}, "
             f"idle_prefix={ts.idle_prefix_ratio:.1%}, "
             f"active_run_p50={ts.active_run_p50:.0f}f, "
             f"valid_window(seq=10)={ts.valid_window_ratio_10:.1%}."
@@ -419,3 +423,8 @@ class TemporalSufficiencyMetric(MetricBase):
                 "reference_population": ts.total_frames,
             },
         )
+
+
+# Backward compatibility alias — deprecated, will be removed in v1.0
+TemporalSufficiencyMetric = TemporalStructureMetric
+
