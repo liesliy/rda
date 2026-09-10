@@ -77,6 +77,8 @@ REASON_CODE_BY_METRIC: Dict[str, str] = {
     "video_freeze": "REPAIRABLE",
     "video_stream_sync": "REPAIRABLE",
     "video_timestamp_alignment": "REPAIRABLE",
+    # v0.9: video_frame_integrity was computed but missing from rules.CRITICAL_METRICS
+    "video_frame_integrity": "REPAIRABLE",
 }
 
 

@@ -217,6 +217,7 @@ _EVIDENCE_LEVEL_BY_METRIC: Dict[str, str] = {
     "video_freeze": "HARD_FAIL",
     "video_timestamp_alignment": "HARD_FAIL",
     "video_stream_sync": "HARD_FAIL",
+    "video_frame_integrity": "HARD_FAIL",
     "sensor_synchronization": "UNVERIFIABLE",
     "sampling_jitter": "RISK_SIGNAL",
     "velocity_acceleration": "RISK_SIGNAL",

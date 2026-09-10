@@ -1,8 +1,15 @@
-"""Episode-level audit logic.
+"""Episode-level audit logic (v0.9).
 
 The :class:`EpisodeAuditor` runs a set of metrics against a single episode
 and produces an :class:`EpisodeAuditResult` with per-metric results and an
 overall classification verdict.
+
+v0.9 changes:
+  - Diagnostic metrics (formerly REVIEW_METRICS) now produce findings
+    attached to their MetricResult but do NOT trigger REVIEW verdict.
+  - ``upgrade_verdict_by_behavior`` is now opt-in (disabled by default).
+  - Diagnostic findings are attached to diagnostic metrics' MetricResult
+    so they appear in reports without affecting the verdict.
 
 P0-1: Reference Calibration Engine integration
 -----------------------------------------------
@@ -23,7 +30,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
-from rda.audit.rules import AuditVerdict, classify_episode, upgrade_verdict_by_behavior, compute_behavior_severity
+from rda.audit.rules import (
+    AuditVerdict,
+    classify_episode,
+    upgrade_verdict_by_behavior,
+    compute_behavior_severity,
+    DIAGNOSTIC_METRICS,
+)
 from rda.io.schema import EpisodeData
 from rda.metrics.base import MetricAvailability, MetricBase, MetricResult
 
@@ -168,40 +181,48 @@ class EpisodeAuditor:
                 old = metric_results[metric_name]
                 metric_results[metric_name] = old.with_reference_score(z, pct)
 
-        # Rule-based verdict (unchanged — rule-based still determines
-        # PASS/REVIEW/EXCLUDE; deviation score is additional signal)
+        # v0.9: Rule-based verdict — only CRITICAL metrics affect verdict.
+        # Diagnostic metrics produce findings but don't change the verdict.
         verdict = classify_episode(list(metric_results.values()))
 
-        # Behavior-aware verdict upgrade: if rule-based is PASS but
-        # behavioral metrics show anomalies, upgrade to REVIEW
+        # v0.9: Behavior-aware verdict upgrade is now opt-in (disabled by default).
         verdict = upgrade_verdict_by_behavior(verdict, list(metric_results.values()))
 
-        # Compute behavior severity and generate findings for explainability
+        # Compute behavior severity and generate findings for explainability.
+        # v0.9: Diagnostic findings are attached to diagnostic metrics' MetricResult
+        # so they appear in reports, but they don't affect the verdict.
         behavior_severity, behavior_findings = compute_behavior_severity(list(metric_results.values()))
 
         # Attach behavioral findings to the corresponding metric results
-        # so they appear in the audit report with explanations
+        # so they appear in the audit report with explanations.
+        # v0.9: Only attach to DIAGNOSTIC_METRICS (not to critical metrics).
+        diagnostic_set = set(DIAGNOSTIC_METRICS)
         for finding in behavior_findings:
             metric_name = finding["metric"]
-            if metric_name in metric_results:
-                old_result = metric_results[metric_name]
-                # Create a new MetricResult with has_finding=True and updated assessment
-                new_assessment = {
-                    "status": "review",
-                    "severity": "medium" if finding["severity"] >= 20 else "low",
-                    "reason": finding["reason"],
-                }
-                metric_results[metric_name] = MetricResult(
-                    name=old_result.name,
-                    availability=old_result.availability,
-                    measurement=dict(old_result.measurement),
-                    assessment=new_assessment,
-                    details=dict(old_result.details),
-                    message=old_result.message,
-                    z_score=old_result.z_score,
-                    percentile=old_result.percentile,
-                    has_finding=True,
-                )
+            if metric_name not in diagnostic_set:
+                continue
+            if metric_name not in metric_results:
+                continue
+            old_result = metric_results[metric_name]
+            # Create a new MetricResult with has_finding=True and updated assessment.
+            # Note: has_finding is set to True, but classify_episode ignores
+            # diagnostic metrics, so this does NOT affect the verdict.
+            new_assessment = {
+                "status": "review",
+                "severity": "medium" if finding["severity"] >= 20 else "low",
+                "reason": finding["reason"],
+            }
+            metric_results[metric_name] = MetricResult(
+                name=old_result.name,
+                availability=old_result.availability,
+                measurement=dict(old_result.measurement),
+                assessment=new_assessment,
+                details=dict(old_result.details),
+                message=old_result.message,
+                z_score=old_result.z_score,
+                percentile=old_result.percentile,
+                has_finding=True,
+            )
 
         # --- P0 fix (v0.4.12): 0-frame episodes must not PASS ---
         # If an episode has 0 frames (e.g. meta/data mapping mismatch),
