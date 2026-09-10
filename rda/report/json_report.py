@@ -270,9 +270,13 @@ def _verifiability_for_metric(metric_name: str, m_result) -> str:
     - N/A: check does not apply to the current data
     """
     if m_result.availability == MetricAvailability.NOT_AVAILABLE:
+        # N/A and "not verifiable" both surface as unavailable; the
+        # reason string distinguishes a modality that is absent (N/A)
+        # from a check that could not be evaluated (Not verifiable).
+        reason = (m_result.assessment.get("reason") or "") if m_result.assessment else ""
+        if reason in ("no_video_features", "single_camera") or reason.startswith("dep_"):
+            return "N/A"
         return "Not verifiable"
-    if m_result.availability == MetricAvailability.NA:
-        return "N/A"
     return _VERIFIABILITY_BY_METRIC.get(metric_name, "Verified")
 
 

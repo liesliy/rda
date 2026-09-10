@@ -341,10 +341,13 @@ class JitterMetric(MetricBase):
 
         msg = f"Sampling jitter CV = {cv:.4f} (mean dt = {mean_dt:.2f} ms, std = {std_dt:.2f} ms)."
 
-        # Pure observational
+        # Pure observational. Include jitter_ratio (= CV) explicitly so that
+        # audit.rules.compute_behavior_severity, which reads measurement
+        # "jitter_ratio", can surface this diagnostic; previously only
+        # "cv"/"jitter_ms" were emitted, so the finding never fired.
         return MetricResult.make_pass(
             name=self.name,
-            measurement={"score_compat": 1.0, "cv": cv, "jitter_ms": std_dt},
+            measurement={"score_compat": 1.0, "cv": cv, "jitter_ms": std_dt, "jitter_ratio": cv},
             message=msg,
             details=details,
             baseline={
