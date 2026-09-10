@@ -6,7 +6,7 @@ Covers:
   slow motion.
 - video_timestamp_alignment: consistent spans pass; systematic drift
   grades REVIEW (soft) / EXCLUDE (hard); N/A without timestamps.
-- video_stream_sync: missing camera → EXCLUDE; single camera → N/A;
+- video_stream_presence: missing camera → EXCLUDE; single camera → N/A;
   consistent multi-camera → PASS.
 - visual_quality: clean video passes (never EXCLUDE); REVIEW at most.
 - verdict integration: video_freeze in CRITICAL_METRICS,
@@ -28,7 +28,7 @@ from rda.io.schema import EpisodeData
 from rda.metrics.base import MetricAvailability, MetricResult
 from rda.metrics.visual_integrity import (
     VideoFreezeMetric,
-    VideoStreamSyncMetric,
+    VideoStreamPresenceMetric,
     VideoTimestampAlignmentMetric,
 )
 from rda.metrics.visual_quality import VisualQualityMetric
@@ -182,13 +182,13 @@ class TestVideoTimestampAlignment:
 
 
 # ---------------------------------------------------------------------------
-# video_stream_sync
+# video_stream_presence
 # ---------------------------------------------------------------------------
 
-class TestVideoStreamSync:
+class TestVideoStreamPresence:
     def test_multi_camera_ok(self, tmp_path):
         ep = _make_episode(tmp_path, cameras={"cam_a": None, "cam_b": None})
-        r = VideoStreamSyncMetric().compute(ep)
+        r = VideoStreamPresenceMetric().compute(ep)
         assert r.assessment["status"] == "pass"
 
     def test_missing_camera_is_exclude(self, tmp_path):
@@ -196,12 +196,12 @@ class TestVideoStreamSync:
         # Remove the second camera's file → unresolvable stream.
         (Path(ep.meta["dataset_root"]) / "videos" / "cam_b" / "chunk-000"
          / "file-000.mp4").unlink()
-        r = VideoStreamSyncMetric().compute(ep)
+        r = VideoStreamPresenceMetric().compute(ep)
         assert r.assessment["status"] == "exclude"
 
     def test_single_camera_is_na(self, tmp_path):
         ep = _make_episode(tmp_path, cameras={"only_cam": None})
-        r = VideoStreamSyncMetric().compute(ep)
+        r = VideoStreamPresenceMetric().compute(ep)
         assert r.assessment["status"] == "na"
 
 
@@ -233,7 +233,7 @@ class TestVisualQuality:
 class TestIntegration:
     def test_va_a_in_critical_metrics(self):
         from rda.audit.rules import CRITICAL_METRICS
-        for m in ("video_freeze", "video_timestamp_alignment", "video_stream_sync"):
+        for m in ("video_freeze", "video_timestamp_alignment", "video_stream_presence"):
             assert m in CRITICAL_METRICS
 
     def test_va_b_in_review_metrics(self):
@@ -245,7 +245,7 @@ class TestIntegration:
         names = {cls.name for cls in ALL_METRICS}
         assert {
             "video_freeze", "video_timestamp_alignment",
-            "video_stream_sync", "visual_quality",
+            "video_stream_presence", "visual_quality",
         } <= names
 
     def test_preflight_excludes_visual_by_default(self):
