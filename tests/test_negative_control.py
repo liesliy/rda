@@ -6,9 +6,10 @@ aggregator ignored those signals entirely — anomalous episodes walked away
 with a PASS badge. These tests exist so that exact failure mode can never
 silently return.
 
-They test the *wiring*, not the metrics: given metric results that a
-rule-based pass would classify as PASS but whose raw measurements contain
-known anomalies, the final verdict must NOT be PASS.
+v0.9 update: DIAGNOSTIC_METRICS (formerly REVIEW_METRICS) are now diagnostic
+findings by default and do NOT affect the verdict. The behavior-severity
+upgrade is opt-in via upgrade_verdict_by_behavior(enabled=True).
+Tests are updated to reflect this new design.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def _observation(name: str, measurement: dict) -> MetricResult:
     """Build a Layer-2 observational result: computed, PASS-by-rules, no finding.
 
     This mirrors how behavioral metrics (idle_ratio, action_discontinuity,
-    distribution) report in production: they measure, they don't fail.
+    etc.) report in production: they measure, they don't fail.
     The historical bug hid here — "computed but never consumed".
     """
     return MetricResult(
@@ -45,40 +46,59 @@ def _observation(name: str, measurement: dict) -> MetricResult:
     )
 
 
-def _full_pipeline(metric_results: list[MetricResult]) -> AuditVerdict:
-    """Replica of the production verdict path in EpisodeAuditor.audit()."""
+def _full_pipeline(metric_results: list[MetricResult], behavior_upgrade: bool = False) -> AuditVerdict:
+    """Replica of the production verdict path in EpisodeAuditor.audit().
+
+    v0.9: behavior upgrade is opt-in. Pass behavior_upgrade=True to enable it.
+    """
     verdict = classify_episode(metric_results)
-    return upgrade_verdict_by_behavior(verdict, metric_results)
+    return upgrade_verdict_by_behavior(verdict, metric_results, enabled=behavior_upgrade)
 
 
-# --- The original failure mode: spikes + frozen arm must not PASS ---------
+# --- v0.9: Diagnostic metrics are findings-only by default ----------------
 
 
-def test_spikes_alone_never_pass():
-    """ALOHA-style run: ~30 spikes/episode across 50 eps ⇒ ~1500 total.
-
-    Rules say PASS (observational metric). The gate must still say REVIEW.
-    This is the exact scenario the historical bug green-badged.
+def test_diagnostic_metrics_do_not_change_verdict_by_default():
+    """v0.9: DIAGNOSTIC_METRICS (action_discontinuity, idle_ratio) are
+    diagnostic-only by default. Even severe anomalies stay PASS unless
+    the behavior upgrade is explicitly enabled.
     """
     results = [
         _observation("action_discontinuity", {"spike_count": 150}),
         _observation("idle_ratio", {"effective_motion_ratio": 0.9}),
     ]
-    assert _full_pipeline(results) != AuditVerdict.PASS
-    assert _full_pipeline(results) == AuditVerdict.REVIEW
+    # Default: diagnostic metrics don't change the verdict
+    assert _full_pipeline(results) == AuditVerdict.PASS
 
 
-def test_frozen_episode_never_pass():
-    """Effective motion ratio 0.05 (arm stationary 95% of frames)."""
+def test_behavior_upgrade_catches_spikes():
+    """When behavior upgrade is enabled, spikes must escalate verdict."""
+    results = [
+        _observation("action_discontinuity", {"spike_count": 150}),
+        _observation("idle_ratio", {"effective_motion_ratio": 0.9}),
+    ]
+    # With behavior upgrade enabled, anomalies are caught
+    assert _full_pipeline(results, behavior_upgrade=True) != AuditVerdict.PASS
+    assert _full_pipeline(results, behavior_upgrade=True) == AuditVerdict.REVIEW
+
+
+def test_frozen_episode_with_upgrade():
+    """Effective motion ratio 0.05 (arm stationary 95% of frames).
+    v0.9: only caught when behavior upgrade is enabled.
+    """
     results = [_observation("idle_ratio", {"effective_motion_ratio": 0.05})]
-    assert _full_pipeline(results) == AuditVerdict.REVIEW
+    # Default: stays PASS (diagnostic only)
+    assert _full_pipeline(results) == AuditVerdict.PASS
+    # With upgrade: escalates to REVIEW
+    assert _full_pipeline(results, behavior_upgrade=True) == AuditVerdict.REVIEW
 
 
 def test_combined_anomalies_escalate_severity():
+    """v0.9: distribution moved to Dataset Profile, replaced by sampling_jitter."""
     spikes = _observation("action_discontinuity", {"spike_count": 200})  # +30
     frozen = _observation("idle_ratio", {"effective_motion_ratio": 0.05})  # +40
-    low_cov = _observation("distribution", {"occupancy_rate": 0.03})  # +30
-    severity, findings = compute_behavior_severity([spikes, frozen, low_cov])
+    jitter = _observation("sampling_jitter", {"jitter_ratio": 0.5})  # +30
+    severity, findings = compute_behavior_severity([spikes, frozen, jitter])
     assert severity >= 20
     assert len(findings) == 3
     assert all("reason" in f and f["reason"] for f in findings)
@@ -92,20 +112,26 @@ def test_clean_episode_stays_pass():
     results = [
         _observation("action_discontinuity", {"spike_count": 2}),
         _observation("idle_ratio", {"effective_motion_ratio": 0.75}),
-        _observation("distribution", {"occupancy_rate": 0.42}),
+        _observation("sampling_jitter", {"jitter_ratio": 0.02}),
     ]
     assert _full_pipeline(results) == AuditVerdict.PASS
+    # Even with behavior upgrade, clean data stays PASS
+    assert _full_pipeline(results, behavior_upgrade=True) == AuditVerdict.PASS
 
 
 def test_severity_threshold_boundary():
-    """Boundary: exactly 20 (10 spikes>20 + 10 eff<0.5) upgrades to REVIEW."""
+    """Boundary: exactly 20 (10 spikes>20 + 10 eff<0.5) upgrades to REVIEW
+    when behavior upgrade is enabled."""
     results = [
         _observation("action_discontinuity", {"spike_count": 25}),  # +10
         _observation("idle_ratio", {"effective_motion_ratio": 0.45}),  # +10
     ]
     severity, _ = compute_behavior_severity(results)
     assert severity == 20
-    assert _full_pipeline(results) == AuditVerdict.REVIEW
+    # Default: stays PASS (upgrade disabled)
+    assert _full_pipeline(results) == AuditVerdict.PASS
+    # With upgrade: escalates to REVIEW
+    assert _full_pipeline(results, behavior_upgrade=True) == AuditVerdict.REVIEW
 
 
 # --- The gate must respect hard corruption --------------------------------
@@ -127,7 +153,7 @@ def test_critical_failure_stays_exclude():
         message="EXCLUDE: NaN values detected.",
         has_finding=True,
     )
-    verdict = _full_pipeline(clean_behavior + [nan_finding])
+    verdict = _full_pipeline(clean_behavior + [nan_finding], behavior_upgrade=True)
     assert verdict == AuditVerdict.EXCLUDE
 
 
