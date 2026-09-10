@@ -198,7 +198,7 @@ class PreflightAuditor:
         else:
             self._preflight_names = [
                 n for n in self._preflight_names
-                if not n.startswith("video_") or n in ("video_frame_integrity", "video_stream_presence")
+                if not n.startswith("video_")
             ]
 
     def evaluate(self, episode) -> EpisodeVerdictSummary:

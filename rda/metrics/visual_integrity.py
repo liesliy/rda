@@ -283,6 +283,15 @@ class VideoStreamPresenceMetric(MetricBase):
                 reason="no_video_features",
                 message="No video features; stream presence check not applicable.",
             )
+        if len(video_features) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="single_camera",
+                message=(
+                    "Single-camera episode; multi-stream presence check "
+                    "not applicable (no silent modality-loss risk)."
+                ),
+            )
         if not dataset_root:
             return MetricResult.make_na(
                 name=self.name,
