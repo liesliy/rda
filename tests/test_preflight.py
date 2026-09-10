@@ -298,11 +298,11 @@ def test_compute_local_metrics_returns_summary():
 
 
 def test_cache_key_v3_namespacing():
-    """v3 cache keys are namespaced and sensitive to verdict + chunk size.
+    """v4 cache keys are namespaced and sensitive to verdict + chunk size.
 
-    The prefix must be colon-free: "v3:<hash>" is an invalid filename
+    The prefix must be colon-free: "v4:<hash>" is an invalid filename
     on Windows (colon = drive separator) and cache writes would fail
-    silently there. "v3-<hash>" is safe on all platforms. REQ-3 added
+    silently there. "v4-<hash>" is safe on all platforms. REQ-3 added
     policy_chunk_size as a key ingredient (it changes rule outcomes).
     """
     from rda.recommend.api_client import _cache_key
@@ -310,7 +310,7 @@ def test_cache_key_v3_namespacing():
     k1 = _cache_key(agg, "frame-wise", "zh")
     k2 = _cache_key(agg, "frame-wise", "zh", {})
     k3 = _cache_key(agg, "frame-wise", "zh", {"exclude_count": 1})
-    assert k1.startswith("v3-")
+    assert k1.startswith("v4-")
     assert ":" not in k1                      # Windows-safe filename
     assert k1 == k2          # empty verdict dict == absent (back-compat shape)
     assert k1 != k3          # different verdicts -> different cache entries

@@ -169,7 +169,7 @@ class TestContractV3Client:
         k_none = _cache_key(agg, "temporal", "zh", None, None)
         k_16 = _cache_key(agg, "temporal", "zh", None, 16)
         k_24 = _cache_key(agg, "temporal", "zh", None, 24)
-        assert k_none.startswith("v3-")
+        assert k_none.startswith("v4-")
         assert k_16 != k_none
         assert k_16 != k_24
         assert ":" not in k_16  # Windows-safe
