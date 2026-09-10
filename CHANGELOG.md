@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.9.0 - 2026-09-10
+
+Four-layer audit architecture: Integrity Gate → Trajectory Diagnostics →
+Dataset Profile → Dataset Summary. The audit verdict is now driven
+exclusively by hard integrity checks; diagnostic metrics report
+measurements and findings without flipping episode verdicts. See
+`RDA_v0.9_核心参数规范.md` / `RDA_v0.9_迁移计划.md` for the full design.
+
+### Changed — rules layer (Phase 1)
+- `REVIEW_METRICS` renamed to `DIAGNOSTIC_METRICS` (backward-compatible
+  alias `REVIEW_METRICS` kept). Diagnostic findings no longer trigger a
+  REVIEW verdict — they produce measurements + findings only.
+- `upgrade_verdict_by_behavior` is now opt-in (`enabled=False` by
+  default).
+- `compute_behavior_severity`: added `sampling_jitter` branch
+  (jitter_ratio > 0.3 → +30 severity, > 0.1 → +10); fixed the
+  `distribution` → `coverage` field mapping (`occupancy_rate`).
+- `video_frame_integrity` wired into `CRITICAL_METRICS` (fixes the v0.8
+  wiring gap; a failed frame-integrity check now hard-excludes).
+
+### Changed — video stream metrics split (Phase 2)
+- `video_stream_sync` split into four independent metrics:
+  - `video_stream_presence` (L1, hard check — missing camera stream →
+    EXCLUDE),
+  - `video_stream_span_consistency` (L2 diagnostic),
+  - `video_stream_temporal_offset` (L2 measurement, pairwise frame-level
+    offset; "Not verifiable" without frame timestamps),
+  - `video_stream_temporal_drift` (L2 measurement, clock drift rate).
+  Old `VideoStreamSyncMetric` names are kept as compatibility aliases.
+
+### Changed — naming and layer placement (Phase 3)
+- `temporal_sufficiency` renamed to `temporal_structure` (compatibility
+  alias kept). It now belongs to the Dataset Profile (L3) layer.
+- L3 metrics (`distribution`, `coverage`, `temporal_structure`) no
+  longer participate in episode verdicts; their measurements feed the
+  Dataset Profile aggregation only.
+
+### Added — Dataset Summary layer (Phase 4)
+- `rda/report/dataset_summary.py` (new): cross-episode aggregation of
+  idle_ratio (median/P10/P90), sensor sync (median/p90/max of worst p95
+  offset) and visual quality (median blur variance + exposure anomaly
+  ratio). Attached to `DatasetAuditResult.dataset_summary` and emitted
+  in both text and JSON reports.
+
+### Added — verifiability levels + report format (Phase 5)
+- Every metric result now carries a `verifiability` field:
+  **Verified** (hard-checked), **Measured** (observational
+  measurement), **Not verifiable** (missing reference/timestamps),
+  **N/A** (modality absent).
+- JSON report: `report_schema_version` bumped to 1.1; new top-level
+  `dataset_summary` section.
+- Text report restructured into Integrity Gate / Trajectory
+  Diagnostics / Dataset Profile / Dataset Summary sections with a
+  dedicated Video Temporal Verification block.
+
+### Added — recommend audit_signals (Phase 6)
+- Recommend contract bumped to v4: clients may send `audit_signals`
+  (smoothness_summary / calibration_summary / coverage_summary)
+  extracted from the audit pipeline, enabling SMOOTHING_REVIEW /
+  CALIBRATION_CHECK / COVERAGE_SUGGESTION server-side rules. Older
+  servers ignore the unknown key; older clients are unaffected.
+- CLI `rda recommend --audit-report <rda_report.json>`: extracts
+  diagnostic signals from a pre-computed audit report and sends them
+  with the recommendation request.
+- Cache key namespaced `v4-` (includes audit signals).
+
+### Versioning
+- Package version bumped 0.8.0 → 0.9.0 (`__init__.py`, `pyproject.toml`,
+  User-Agent all aligned; enforced by `test_version_consistency.py`).
+
 ## 0.8.0 - 2026-09-06
 
 ### Added (REQ-5 — dataset-level relative baselines + acceptance summary)
