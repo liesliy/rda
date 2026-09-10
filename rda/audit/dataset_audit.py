@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from rda.audit.episode_audit import EpisodeAuditResult, EpisodeAuditor
 from rda.audit.rules import AuditVerdict
 from rda.calibration.reference import ReferenceProfile
 from rda.io.schema import DatasetInfo
-from rda.report.dataset_summary import DatasetSummaryResult, compute_dataset_summary
+
+if TYPE_CHECKING:
+    from rda.report.dataset_summary import DatasetSummaryResult
 
 
 @dataclass
@@ -119,6 +121,8 @@ class DatasetAuditor:
         result.compute_verdict_counts()
 
         # Compute dataset-level summary (v0.9)
+        from rda.report.dataset_summary import compute_dataset_summary
+
         episode_results_for_summary = []
         for idx, ep_result in result.episodes.items():
             ep_dict = {
