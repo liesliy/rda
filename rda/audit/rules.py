@@ -52,6 +52,7 @@ class AuditVerdict(str, Enum):
 # v0.9 changes:
 #   - Added: video_frame_integrity (was computed in codebase but missing
 #     from this list — preflight.py noted this gap).
+#   - Renamed: video_stream_sync → video_stream_presence (presence-only check)
 
 CRITICAL_METRICS: List[str] = [
     "missing_dropout",          # Critical frame loss
@@ -61,7 +62,7 @@ CRITICAL_METRICS: List[str] = [
     "joint_limit",              # Joints outside mechanical limits
     "video_freeze",             # Camera drop-out (identical frames while arm moves)
     "video_timestamp_alignment",# Video/parquet timeline span divergence
-    "video_stream_sync",        # Multi-camera presence & span consistency
+    "video_stream_presence",    # Multi-camera presence check (v0.9: split from video_stream_sync)
     "video_frame_integrity",    # MP4 frame count vs parquet mismatch (NEW in v0.9)
 ]
 
@@ -84,6 +85,9 @@ DIAGNOSTIC_METRICS: List[str] = [
     "action_discontinuity",     # Action trajectory discontinuities
     "idle_ratio",               # Low motion density
     "visual_quality",           # Blur/exposure/contrast issues
+    "video_stream_span_consistency",    # Cross-camera span consistency (v0.9: split from video_stream_sync)
+    "video_stream_temporal_offset",     # Frame-level pairwise temporal offset (v0.9: split from video_stream_sync)
+    "video_stream_temporal_drift",      # Clock drift rate between cameras (v0.9: split from video_stream_sync)
 ]
 
 # Backward compatibility alias — deprecated, will be removed in v1.0

@@ -43,7 +43,10 @@ from rda.metrics.distribution import DistributionMetric, CoverageMetric
 from rda.metrics.video_integrity import VideoFrameIntegrityMetric
 from rda.metrics.visual_integrity import (
     VideoFreezeMetric,
-    VideoStreamSyncMetric,
+    VideoStreamPresenceMetric,
+    VideoStreamSpanConsistencyMetric,
+    VideoStreamTemporalOffsetMetric,
+    VideoStreamTemporalDriftMetric,
     VideoTimestampAlignmentMetric,
 )
 from rda.metrics.visual_quality import VisualQualityMetric
@@ -61,13 +64,12 @@ LAYER1_INTEGRITY: List[Type[MetricBase]] = [
     VideoFrameIntegrityMetric,
     VideoFreezeMetric,
     VideoTimestampAlignmentMetric,
-    VideoStreamSyncMetric,
+    VideoStreamPresenceMetric,
 ]
 """Layer 1 — Data Integrity: deterministic hard checks (pass/exclude).
 
-REQ-4 (v0.7.0) adds the VA-A visual-stream integrity trio: freeze
-detection, video/parquet timestamp alignment, and multi-camera stream
-presence/sync.
+v0.9: VideoStreamSyncMetric split into VideoStreamPresenceMetric (L1)
+plus three diagnostic metrics in L2.
 """
 
 LAYER2_TEMPORAL_MOTION: List[Type[MetricBase]] = [
@@ -77,11 +79,15 @@ LAYER2_TEMPORAL_MOTION: List[Type[MetricBase]] = [
     ActionDiscontinuityMetric,
     TemporalSufficiencyMetric,
     VisualQualityMetric,
+    VideoStreamSpanConsistencyMetric,
+    VideoStreamTemporalOffsetMetric,
+    VideoStreamTemporalDriftMetric,
 ]
 """Layer 2 — Temporal & Motion Anomaly: observational measurements.
 
-REQ-4 (v0.7.0) adds VA-B (``visual_quality``) here: blur/exposure/
-contrast are physical measurements, REVIEW-grade, never a veto."""
+v0.9: Added three video stream diagnostics from the split of
+VideoStreamSyncMetric — span_consistency, temporal_offset, temporal_drift.
+"""
 
 LAYER3_DATASET_UTILITY: List[Type[MetricBase]] = [
     IdleRatioMetric,
@@ -93,7 +99,8 @@ LAYER3_DATASET_UTILITY: List[Type[MetricBase]] = [
 ALL_METRICS: List[Type[MetricBase]] = LAYER1_INTEGRITY + LAYER2_TEMPORAL_MOTION + LAYER3_DATASET_UTILITY
 """All metric classes, in architectural layer order.
 
-v0.7.0 (REQ-4): grew from 14 to 18 with the VA-A trio + VA-B."""
+v0.9: grew from 18 to 20 with the video_stream_sync split into
+4 independent metrics (1 L1 + 3 L2)."""
 
 # ---------------------------------------------------------------------------
 # Portability Tier classification (per MVP Spec v0.2.0 §1.5)
@@ -156,7 +163,7 @@ __all__ = [
     "VideoFrameIntegrityMetric",
     "VideoFreezeMetric",
     "VideoTimestampAlignmentMetric",
-    "VideoStreamSyncMetric",
+    "VideoStreamPresenceMetric",
     # Metric classes — Layer 2 (Temporal & Motion)
     "SensorSyncMetric",
     "JitterMetric",
@@ -164,6 +171,9 @@ __all__ = [
     "ActionDiscontinuityMetric",
     "TemporalSufficiencyMetric",
     "VisualQualityMetric",
+    "VideoStreamSpanConsistencyMetric",
+    "VideoStreamTemporalOffsetMetric",
+    "VideoStreamTemporalDriftMetric",
     # Metric classes — Layer 3 (Dataset Utility)
     "IdleRatioMetric",
     "DistributionMetric",

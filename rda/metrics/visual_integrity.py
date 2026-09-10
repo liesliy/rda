@@ -1,25 +1,25 @@
-"""VA-A: visual-stream integrity metrics (REQ-4, v0.7.0).
+"""VA-A: visual-stream integrity metrics (v0.9).
 
 Hard-evidence checks on the *visual* modality — the video counterpart
-of the kinematic integrity metrics. All three are deterministic, prove
+of the kinematic integrity metrics. All are deterministic, prove
 that the video stream is broken (not merely "looks bad"), and never
-rely on semantic judgment:
+rely on semantic judgment.
 
-1. ``video_freeze`` — consecutive frozen video frames (>0.5 s) while the
-   arm is *moving* per the action timeline. A camera that dropped out
-   (USB hiccup, encoder stall) keeps producing identical compressed
-   frames while ``observation.state``/``action`` keep changing. This is
-   the visual twin of ``missing_dropout``.
+v0.9 changes:
+  video_stream_sync (v0.8) has been split into four independent metrics:
 
-2. ``video_timestamp_alignment`` — the episode's video frame span
-   (from ``from_timestamp``/``to_timestamp`` × fps, cross-checked against
-   the actually decodable frame count) versus the parquet timeline span.
-   A systematic mismatch means video and state/action timelines drift
-   apart — frame indices in training silently sample the wrong moments.
+  1. ``video_stream_presence`` (Layer 1 / CRITICAL) — all required camera
+     streams exist and are readable. Missing stream = silent modality loss.
+  2. ``video_stream_span_consistency`` (Layer 2 / Diagnostic) — per-camera
+     video spans are consistent with each other.
+  3. ``video_stream_temporal_offset`` (Layer 2 / Diagnostic) — frame-level
+     pairwise temporal offset between camera streams.
+  4. ``video_stream_temporal_drift`` (Layer 2 / Diagnostic) — clock drift
+     rate between camera streams over the episode.
 
-3. ``video_stream_sync`` — multi-camera presence and drift. All camera
-   features referenced by an episode must resolve to readable files with
-   consistent frame spans. Missing wrist camera = silent modality loss.
+  Existing metrics (unchanged):
+  5. ``video_freeze`` — consecutive frozen video frames while the arm moves.
+  6. ``video_timestamp_alignment`` — video span vs parquet timeline span.
 
 Design constraints (aligned with the v1.1 roadmap):
 
@@ -32,15 +32,12 @@ Design constraints (aligned with the v1.1 roadmap):
   OUT of scope — opt-in deep check in a future version.
 - N/A is returned (never a false fail) when videos cannot be located,
   decoded, or the dataset has no video features.
-- Only ``video_freeze`` failures grade EXCLUDE (camera drop-out is
-  deterministic corruption). Timestamp alignment failures with large
-  systematic drift also grade EXCLUDE when beyond hard tolerance;
-  small drift is REVIEW.
 """
 from __future__ import annotations
 
 import math
 from functools import lru_cache
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -53,15 +50,13 @@ from rda.metrics.base import MetricBase, MetricResult
 # --- Tunables ---
 _FREEZE_GRAY_SIZE = 64          # decode target: 64×64 grayscale
 _FREEZE_MIN_SECONDS = 0.5       # consecutive frozen span to count as a freeze
-#   ^ single 0.5 s span can be a legit pause; repeated spans while moving
-#     are the camera-drop signature. A *long* single span (>3 s) is
-#     equally conclusive — no camera "slow motion" lasts 3 s.
 _FREEZE_CONCLUSIVE_RUNS = 3     # this many sustained spans → EXCLUDE
 _FREEZE_CONCLUSIVE_SECONDS = 3.0  # or one span longer than this
 _FREEZE_MAX_TOTAL_RATIO = 0.30  # or frozen ≥30% of the episode
 _MAX_FREEZE_REPORT = 8          # cap freeze regions in details (report size)
 _TS_SOFT_TOLERANCE = 0.02       # 2% span mismatch → review
-_TS_HARD_TOLERANCE = 0.10       # 10% span mismatch → exclude
+_TS_HARD_TOLERANCE = 0.10       # 10% span mismatch → exclude (legacy; span_consistency is diagnostic by default)
+_DRIFT_WINDOW_SEC = 5.0         # window size for temporal drift computation
 
 VIDEO_DEPS_MISSING = "video_deps_missing"
 """NA reason code (REQ-11, v0.7.1): PyAV is not installed.
@@ -90,27 +85,20 @@ def _decode_span_gray(
     Returns an (N, 64, 64) uint8 array, or None when the file cannot be
     opened/decoded. Memoized per (path, span): chunked MP4s are shared
     across episodes but each episode reads its own span.
-
-    The array is kept small on purpose: 64×64 gray at typical 10-15 s
-    episode spans is a few MB at most.
     """
     try:
         import av
     except ImportError:
-        # REQ-11 (v0.7.1): surface the missing optional dependency instead
-        # of silently degrading — callers distinguish "not checked" from
-        # "checked and fine" via this reason code.
         return None
 
     try:
         with av.open(str(video_path)) as container:
             stream = container.streams.video[0]
-            # Seek to the span start (keyframe before start), then decode.
             try:
                 tb = stream.time_base
                 container.seek(int(start_sec / tb), stream=stream)
             except Exception:
-                pass  # seek unsupported → decode from start
+                pass
             frames: List[np.ndarray] = []
             target_w = _FREEZE_GRAY_SIZE
             for packet_frame in container.decode(stream):
@@ -118,13 +106,11 @@ def _decode_span_gray(
                     float(packet_frame.pts * tb) if packet_frame.pts is not None else None
                 )
                 if pts_sec is not None and pts_sec < start_sec - 1.0 / max(fps, 1.0):
-                    continue  # before the span
+                    continue
                 if pts_sec is not None and pts_sec >= end_sec:
                     break
                 img = packet_frame.to_ndarray(format="gray")
                 if img.shape != (target_w, target_w):
-                    # PIL-free resize via numpy slicing fallback is crude;
-                    # use PyAV's scaler instead for quality+speed.
                     img = packet_frame.reformat(
                         width=target_w, height=target_w, format="gray"
                     ).to_ndarray()
@@ -136,22 +122,51 @@ def _decode_span_gray(
         return None
 
 
+@lru_cache(maxsize=256)
+def _get_frame_timestamps(
+    video_path: Path, start_sec: float, end_sec: float
+) -> Optional[np.ndarray]:
+    """Extract per-frame PTS timestamps (in seconds) from a video span.
+
+    Returns a 1-D float64 array of timestamps, or None when the file
+    cannot be opened/decoded or frames lack PTS values.
+    Memoized per (path, start, end).
+    """
+    try:
+        import av
+    except ImportError:
+        return None
+
+    try:
+        with av.open(str(video_path)) as container:
+            stream = container.streams.video[0]
+            tb = float(stream.time_base)
+            try:
+                container.seek(int(start_sec / tb), stream=stream)
+            except Exception:
+                pass
+            timestamps: List[float] = []
+            for packet_frame in container.decode(stream):
+                if packet_frame.pts is None:
+                    continue
+                pts_sec = float(packet_frame.pts) * tb
+                if pts_sec < start_sec - 0.01:
+                    continue
+                if pts_sec >= end_sec:
+                    break
+                timestamps.append(pts_sec)
+            if not timestamps:
+                return None
+            return np.array(timestamps, dtype=np.float64)
+    except Exception:
+        return None
+
+
 def _freeze_runs(
     frames: np.ndarray,
     min_run_frames: int,
 ) -> List[Tuple[int, int]]:
-    """Find runs of consecutive near-identical (camera-stalled) frames.
-
-    A frame i is "frozen" when its mean absolute difference to frame i-1
-    falls below an *adaptive* epsilon. Calibration note (v0.7.0, libero_10
-    diagnosis): a fixed absolute threshold misclassifies slow-motion
-    spans — normal motion at 64×64 gray diffs ~1.0-3.0, slow motion dips
-    to 0.3-1.0, while true codec-identical freeze is < ~0.1. The epsilon
-    is therefore anchored to the episode's own low tail: the p10 of the
-    diff distribution is treated as motion noise, and any frame below
-    ``max(0.10, 0.25 × p10)`` is frozen. A camera stall produces diffs of
-    exactly 0 (identical decoded frames), far below any motion noise.
-    """
+    """Find runs of consecutive near-identical (camera-stalled) frames."""
     if frames.shape[0] < 2:
         return []
     flat = frames.reshape(frames.shape[0], -1).astype(np.float32)
@@ -176,18 +191,13 @@ def _freeze_runs(
 def _moving_mask(
     episode: EpisodeData, n_frames: int
 ) -> Optional[np.ndarray]:
-    """Per-frame motion boolean from the primary action array.
-
-    Reuses the same "is this frame moving" notion as the idle detector:
-    frame-to-frame norm delta of the primary action channel.
-    """
+    """Per-frame motion boolean from the primary action array."""
     from rda.recommend.temporal_metrics import _primary_action_array
 
     arr = _primary_action_array(episode)
     if arr is None or arr.ndim != 2 or arr.shape[0] == 0:
         return None
     deltas = np.abs(np.diff(arr.astype(np.float32), axis=0)).mean(axis=1)
-    # Pad to length n_frames (last frame inherits previous delta).
     if deltas.shape[0] == 0:
         return None
     deltas = np.concatenate([deltas, deltas[-1:]])
@@ -197,6 +207,506 @@ def _moving_mask(
     scale = float(np.percentile(deltas, 90)) or 1.0
     return deltas > (0.05 * scale)
 
+
+def _resolve_video_path(
+    root: Path, feature: str, info: Dict[str, Any]
+) -> Optional[Path]:
+    """Resolve the video file path for a feature. Returns None if unresolvable."""
+    chunk = info.get("chunk_index")
+    file_idx = info.get("file_index")
+    if chunk is None or file_idx is None:
+        return None
+    video_path = (
+        root / "videos" / feature
+        / f"chunk-{int(chunk):03d}" / f"file-{int(file_idx):03d}.mp4"
+    )
+    return video_path if video_path.exists() else None
+
+
+def _pairwise_nearest_offsets(
+    ts_a: np.ndarray, ts_b: np.ndarray
+) -> np.ndarray:
+    """For each timestamp in ts_a, find the nearest timestamp in ts_b.
+
+    Returns array of offsets (ts_a_i - nearest_ts_b_i) in seconds.
+    """
+    if len(ts_a) == 0 or len(ts_b) == 0:
+        return np.array([])
+    indices = np.searchsorted(ts_b, ts_a, side="left")
+    offsets = np.empty(len(ts_a), dtype=np.float64)
+    for i, idx in enumerate(indices):
+        candidates = []
+        if idx < len(ts_b):
+            candidates.append(ts_b[idx])
+        if idx > 0:
+            candidates.append(ts_b[idx - 1])
+        if candidates:
+            nearest = min(candidates, key=lambda t: abs(t - ts_a[i]))
+            offsets[i] = ts_a[i] - nearest
+        else:
+            offsets[i] = np.nan
+    return offsets
+
+
+# =========================================================================
+# 1. VideoStreamPresenceMetric (Layer 1 — CRITICAL)
+# =========================================================================
+
+class VideoStreamPresenceMetric(MetricBase):
+    """Check that all required camera streams exist and are readable.
+
+    Layer 1 (Data Integrity): a missing or unreadable camera stream means
+    silent modality loss — the training script would broadcast zeros/garbage
+    for the missing view.
+    """
+
+    name = "video_stream_presence"
+    description = (
+        "Multi-camera presence check — all required camera streams must "
+        "exist and be readable (silent modality loss detection)."
+    )
+
+    def compute(self, episode: EpisodeData) -> MetricResult:
+        meta = episode.meta or {}
+        video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
+        dataset_root = meta.get("dataset_root")
+
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message="PyAV is not installed — visual stream was NOT audited.",
+            )
+        if not video_features:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="no_video_features",
+                message="No video features; stream presence check not applicable.",
+            )
+        if not dataset_root:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="dataset_root_unknown",
+                message="Loader did not provide dataset root; cannot check streams.",
+            )
+
+        root = Path(dataset_root)
+        missing: List[str] = []
+        verified: List[str] = []
+
+        for feature, info in sorted(video_features.items()):
+            video_path = _resolve_video_path(root, feature, info)
+            if video_path is None:
+                missing.append(feature)
+                continue
+            # Try to verify the file is readable (at least openable)
+            try:
+                import av
+                with av.open(str(video_path)) as container:
+                    if len(container.streams.video) == 0:
+                        missing.append(feature)
+                        continue
+                verified.append(feature)
+            except Exception:
+                missing.append(feature)
+
+        details: Dict[str, Any] = {
+            "expected_streams": sorted(video_features.keys()),
+            "verified": verified,
+            "missing": missing,
+        }
+
+        if missing:
+            return MetricResult.make_exclude(
+                name=self.name,
+                reason="camera_stream_missing",
+                message=(
+                    f"Camera stream(s) missing or unreadable: "
+                    f"{', '.join(missing)}. Downstream training would lose "
+                    f"these views silently."
+                ),
+                details=details,
+            )
+
+        return MetricResult.make_pass(
+            name=self.name,
+            measurement={
+                "score_compat": 1.0,
+                "stream_count": len(verified),
+            },
+            message=f"All {len(verified)} camera stream(s) present and readable.",
+            details=details,
+        )
+
+
+# =========================================================================
+# 2. VideoStreamSpanConsistencyMetric (Layer 2 — Diagnostic)
+# =========================================================================
+
+class VideoStreamSpanConsistencyMetric(MetricBase):
+    """Check multi-camera span consistency (diagnostic).
+
+    Compares per-camera video durations (to_timestamp - from_timestamp)
+    to detect if streams have significantly different spans. Default:
+    measurement only, does not affect verdict.
+    """
+
+    name = "video_stream_span_consistency"
+    description = (
+        "Multi-camera span consistency — checks whether video spans "
+        "across cameras are consistent (diagnostic, does not affect verdict by default)."
+    )
+
+    def compute(self, episode: EpisodeData) -> MetricResult:
+        meta = episode.meta or {}
+        video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
+
+        if not video_features:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="no_video_features",
+                message="No video features; span consistency check not applicable.",
+            )
+        if len(video_features) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="single_camera",
+                message="Only one camera stream; span consistency not applicable.",
+            )
+
+        spans: Dict[str, float] = {}
+        for feature, info in sorted(video_features.items()):
+            from_ts = info.get("from_timestamp")
+            to_ts = info.get("to_timestamp")
+            if from_ts is not None and to_ts is not None:
+                spans[feature] = float(to_ts) - float(from_ts)
+
+        if len(spans) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="insufficient_span_data",
+                message="Fewer than 2 streams have timestamp data; cannot compare spans.",
+            )
+
+        vals = list(spans.values())
+        median_span = float(np.median(vals))
+        drifts: Dict[str, float] = {}
+        for feat, span in spans.items():
+            if median_span > 0:
+                drifts[feat] = round(abs(span - median_span) / median_span, 4)
+            else:
+                drifts[feat] = 0.0
+        max_drift = max(drifts.values()) if drifts else 0.0
+
+        measurement = {
+            "spans_sec": {k: round(v, 4) for k, v in spans.items()},
+            "median_span_sec": round(median_span, 4),
+            "drifts": drifts,
+            "max_drift": round(max_drift, 4),
+        }
+
+        return MetricResult.make_pass(
+            name=self.name,
+            measurement=measurement,
+            message=(
+                f"Span consistency: median={median_span:.2f}s, "
+                f"max drift={max_drift:.2%} across {len(spans)} streams."
+            ),
+            details={"drift_threshold_note": "diagnostic only — does not affect verdict by default"},
+        )
+
+
+# =========================================================================
+# 3. VideoStreamTemporalOffsetMetric (Layer 2 — Diagnostic)
+# =========================================================================
+
+class VideoStreamTemporalOffsetMetric(MetricBase):
+    """Frame-level pairwise temporal offset between camera streams.
+
+    For each pair of cameras, extracts per-frame PTS timestamps and
+    computes nearest-neighbor offsets. Reports median, p95, p99, max,
+    std, and signed median per pair.
+    """
+
+    name = "video_stream_temporal_offset"
+    description = (
+        "Frame-level pairwise temporal offset between camera streams "
+        "(diagnostic measurement)."
+    )
+
+    def compute(self, episode: EpisodeData) -> MetricResult:
+        meta = episode.meta or {}
+        video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
+        dataset_root = meta.get("dataset_root")
+
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message="PyAV is not installed — temporal offset not audited.",
+            )
+        if not video_features:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="no_video_features",
+                message="No video features; temporal offset not applicable.",
+            )
+        if not dataset_root:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="dataset_root_unknown",
+                message="Loader did not provide dataset root.",
+            )
+        if len(video_features) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="single_camera",
+                message="Only one camera stream; pairwise offset not applicable.",
+            )
+
+        root = Path(dataset_root)
+
+        # Extract per-frame timestamps for each stream
+        stream_timestamps: Dict[str, np.ndarray] = {}
+        for feature, info in sorted(video_features.items()):
+            video_path = _resolve_video_path(root, feature, info)
+            if video_path is None:
+                continue
+            from_ts = info.get("from_timestamp", 0.0)
+            to_ts = info.get("to_timestamp", 0.0)
+            if from_ts is None or to_ts is None:
+                continue
+            ts = _get_frame_timestamps(video_path, float(from_ts), float(to_ts))
+            if ts is not None and len(ts) > 0:
+                stream_timestamps[feature] = ts
+
+        if len(stream_timestamps) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="insufficient_frame_timestamps",
+                message=(
+                    "Fewer than 2 streams have frame-level timestamps; "
+                    "cannot compute pairwise offset. "
+                    "Suggestion: re-record with hardware-triggered cameras "
+                    "or enable per-frame PTS in video encoder."
+                ),
+            )
+
+        # Compute pairwise offsets
+        pairwise: Dict[str, Dict[str, float]] = {}
+        all_p95: List[float] = []
+        all_max: List[float] = []
+
+        features = sorted(stream_timestamps.keys())
+        for feat_a, feat_b in combinations(features, 2):
+            ts_a = stream_timestamps[feat_a]
+            ts_b = stream_timestamps[feat_b]
+            offsets = _pairwise_nearest_offsets(ts_a, ts_b)
+            if len(offsets) == 0:
+                continue
+
+            offsets_ms = offsets * 1000.0  # convert to ms
+            abs_offsets_ms = np.abs(offsets_ms)
+            pair_name = f"{feat_a}_vs_{feat_b}"
+            pair_stats = {
+                "offset_median_ms": round(float(np.median(abs_offsets_ms)), 2),
+                "offset_p95_ms": round(float(np.percentile(abs_offsets_ms, 95)), 2),
+                "offset_p99_ms": round(float(np.percentile(abs_offsets_ms, 99)), 2),
+                "offset_max_ms": round(float(np.max(abs_offsets_ms)), 2),
+                "offset_std_ms": round(float(np.std(offsets_ms)), 2),
+                "signed_median_ms": round(float(np.median(offsets_ms)), 2),
+            }
+            pairwise[pair_name] = pair_stats
+            all_p95.append(pair_stats["offset_p95_ms"])
+            all_max.append(pair_stats["offset_max_ms"])
+
+        if not pairwise:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="no_pairwise_data",
+                message="Could not compute pairwise offsets for any stream pair.",
+            )
+
+        worst_p95 = max(all_p95)
+        worst_max = max(all_max)
+
+        measurement = {
+            "measured": True,
+            "pairwise": pairwise,
+            "worst_p95_offset_ms": round(worst_p95, 2),
+            "worst_max_offset_ms": round(worst_max, 2),
+        }
+
+        return MetricResult.make_pass(
+            name=self.name,
+            measurement=measurement,
+            message=(
+                f"Temporal offset: worst p95={worst_p95:.1f}ms, "
+                f"worst max={worst_max:.1f}ms across {len(pairwise)} pair(s)."
+            ),
+        )
+
+
+# =========================================================================
+# 4. VideoStreamTemporalDriftMetric (Layer 2 — Diagnostic)
+# =========================================================================
+
+class VideoStreamTemporalDriftMetric(MetricBase):
+    """Clock drift rate between camera streams over the episode.
+
+    Splits the episode into time windows, computes pairwise offset per
+    window, fits a linear trend to detect systematic clock drift.
+    Reports drift rate in ms/min per stream pair.
+    """
+
+    name = "video_stream_temporal_drift"
+    description = (
+        "Multi-camera clock drift rate over the episode "
+        "(diagnostic measurement)."
+    )
+
+    def compute(self, episode: EpisodeData) -> MetricResult:
+        meta = episode.meta or {}
+        video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
+        dataset_root = meta.get("dataset_root")
+        fps = meta.get("fps")
+
+        if _av_missing():
+            return MetricResult.make_na(
+                name=self.name,
+                reason=VIDEO_DEPS_MISSING,
+                message="PyAV is not installed — temporal drift not audited.",
+            )
+        if not video_features:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="no_video_features",
+                message="No video features; temporal drift not applicable.",
+            )
+        if not dataset_root:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="dataset_root_unknown",
+                message="Loader did not provide dataset root.",
+            )
+        if len(video_features) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="single_camera",
+                message="Only one camera stream; drift not applicable.",
+            )
+
+        root = Path(dataset_root)
+
+        # Extract per-frame timestamps for each stream
+        stream_timestamps: Dict[str, np.ndarray] = {}
+        for feature, info in sorted(video_features.items()):
+            video_path = _resolve_video_path(root, feature, info)
+            if video_path is None:
+                continue
+            from_ts = info.get("from_timestamp", 0.0)
+            to_ts = info.get("to_timestamp", 0.0)
+            if from_ts is None or to_ts is None:
+                continue
+            ts = _get_frame_timestamps(video_path, float(from_ts), float(to_ts))
+            if ts is not None and len(ts) > 0:
+                stream_timestamps[feature] = ts
+
+        if len(stream_timestamps) < 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="insufficient_frame_timestamps",
+                message="Fewer than 2 streams with frame timestamps; cannot compute drift.",
+            )
+
+        # Determine episode time range
+        all_starts = [ts[0] for ts in stream_timestamps.values()]
+        all_ends = [ts[-1] for ts in stream_timestamps.values()]
+        episode_start = float(min(all_starts))
+        episode_end = float(max(all_ends))
+        episode_duration = episode_end - episode_start
+
+        if episode_duration < _DRIFT_WINDOW_SEC * 2:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="episode_too_short",
+                message=(
+                    f"Episode duration ({episode_duration:.1f}s) is too short "
+                    f"for drift analysis (need ≥ {_DRIFT_WINDOW_SEC * 2:.0f}s)."
+                ),
+            )
+
+        # Compute per-window offsets and fit linear trend
+        features = sorted(stream_timestamps.keys())
+        pairwise: Dict[str, Dict[str, float]] = {}
+
+        for feat_a, feat_b in combinations(features, 2):
+            ts_a = stream_timestamps[feat_a]
+            ts_b = stream_timestamps[feat_b]
+
+            # Slide windows
+            window_centers: List[float] = []
+            window_offsets: List[float] = []
+
+            t = episode_start
+            while t + _DRIFT_WINDOW_SEC <= episode_end:
+                w_start = t
+                w_end = t + _DRIFT_WINDOW_SEC
+                mask_a = (ts_a >= w_start) & (ts_a < w_end)
+                mask_b = (ts_b >= w_start) & (ts_b < w_end)
+                if mask_a.sum() >= 3 and mask_b.sum() >= 3:
+                    offsets = _pairwise_nearest_offsets(ts_a[mask_a], ts_b[mask_b])
+                    valid = offsets[~np.isnan(offsets)]
+                    if len(valid) > 0:
+                        window_centers.append(w_start + _DRIFT_WINDOW_SEC / 2)
+                        window_offsets.append(float(np.median(np.abs(valid))) * 1000.0)  # ms
+                t += _DRIFT_WINDOW_SEC
+
+            if len(window_centers) < 3:
+                pairwise[f"{feat_a}_vs_{feat_b}"] = {
+                    "drift_rate_ms_per_min": None,
+                    "r_squared": None,
+                    "note": "insufficient windows for trend fitting",
+                }
+                continue
+
+            # Linear fit: offset(t) = a + b * t
+            centers = np.array(window_centers)
+            offsets_arr = np.array(window_offsets)
+            # Normalize time to minutes from episode start
+            t_min = (centers - episode_start) / 60.0
+            coeffs = np.polyfit(t_min, offsets_arr, 1)
+            slope = coeffs[0]  # ms per minute
+            predicted = np.polyval(coeffs, t_min)
+            ss_res = np.sum((offsets_arr - predicted) ** 2)
+            ss_tot = np.sum((offsets_arr - np.mean(offsets_arr)) ** 2)
+            r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+            pairwise[f"{feat_a}_vs_{feat_b}"] = {
+                "drift_rate_ms_per_min": round(abs(slope), 3),
+                "r_squared": round(r_squared, 3),
+            }
+
+        measurement = {
+            "measured": True,
+            "pairwise": pairwise,
+            "window_size_sec": _DRIFT_WINDOW_SEC,
+            "num_windows": len(window_centers) if 'window_centers' in dir() else 0,
+        }
+
+        return MetricResult.make_pass(
+            name=self.name,
+            measurement=measurement,
+            message=(
+                f"Temporal drift computed across {len(pairwise)} pair(s) "
+                f"with {_DRIFT_WINDOW_SEC}s windows."
+            ),
+        )
+
+
+# =========================================================================
+# 5. VideoFreezeMetric (Layer 1 — unchanged)
+# =========================================================================
 
 class VideoFreezeMetric(MetricBase):
     """Detect frozen video streams while the arm is moving (VA-A).
@@ -274,7 +784,6 @@ class VideoFreezeMetric(MetricBase):
                 continue
             checked += 1
 
-            # Map video frame index → parquet frame index (proportional).
             n_video, n_parquet = frames.shape[0], episode.num_frames
             scale = n_parquet / max(n_video, 1)
 
@@ -305,12 +814,6 @@ class VideoFreezeMetric(MetricBase):
         hard = [r for r in freeze_regions if r["duration_sec"] >= _FREEZE_MIN_SECONDS][
             :_MAX_FREEZE_REPORT
         ]
-        # A *stalled camera* produces codec-identical frames: every
-        # frozen span has near-zero inter-frame diff. Slow motion has
-        # low-but-nonzero diff. Require the span to be genuinely flat
-        # (the freeze-run finder already used the adaptive epsilon) AND
-        # multiple sustained spans before grading EXCLUDE — a single
-        # span is a REVIEW-level hint, per the audit-not-veto posture.
         details: Dict[str, Any] = {
             "checked_features": checked,
             "freeze_regions": freeze_regions[:_MAX_FREEZE_REPORT],
@@ -358,7 +861,6 @@ class VideoFreezeMetric(MetricBase):
                 details=details,
             )
 
-        # One short freeze while moving: suspicious but not conclusive.
         r0 = freeze_regions[0]
         return MetricResult.make_review(
             name=self.name,
@@ -376,6 +878,10 @@ class VideoFreezeMetric(MetricBase):
             details=details,
         )
 
+
+# =========================================================================
+# 6. VideoTimestampAlignmentMetric (Layer 1 — unchanged)
+# =========================================================================
 
 class VideoTimestampAlignmentMetric(MetricBase):
     """VA-A: video span vs parquet timeline consistency.
@@ -420,7 +926,6 @@ class VideoTimestampAlignmentMetric(MetricBase):
                 message="Loader did not provide fps; alignment check not applicable.",
             )
 
-        # Parquet timeline span from the timestamp channel.
         ts = episode.timestamps
         if ts is None or len(ts) < 2:
             return MetricResult.make_na(
@@ -507,120 +1012,10 @@ class VideoTimestampAlignmentMetric(MetricBase):
         )
 
 
-class VideoStreamSyncMetric(MetricBase):
-    """VA-A: multi-camera presence & span consistency.
+# =========================================================================
+# Backward compatibility alias
+# =========================================================================
 
-    All camera features referenced by the episode must resolve to
-    readable files with consistent spans. A missing wrist camera or one
-    stream ending early is silent modality loss — the training script
-    would broadcast zeros/garbage for the missing view.
-    """
-
-    name = "video_stream_sync"
-    description = (
-        "VA-A: multi-camera presence and span consistency "
-        "(missing/misaligned camera streams)."
-    )
-
-    def compute(self, episode: EpisodeData) -> MetricResult:
-        meta = episode.meta or {}
-        video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
-        dataset_root = meta.get("dataset_root")
-
-        if _av_missing():
-            return MetricResult.make_na(
-                name=self.name,
-                reason=VIDEO_DEPS_MISSING,
-                message=(
-                    "PyAV is not installed — visual stream was NOT audited. "
-                    "Install it with: pip install av"
-                ),
-            )
-
-        if not video_features:
-            return MetricResult.make_na(
-                name=self.name,
-                reason="no_video_features",
-                message="Single/no camera streams; stream sync not applicable.",
-            )
-        if not dataset_root:
-            return MetricResult.make_na(
-                name=self.name,
-                reason="dataset_root_unknown",
-                message="Loader did not provide dataset root; cannot check streams.",
-            )
-        if len(video_features) < 2:
-            return MetricResult.make_na(
-                name=self.name,
-                reason="single_camera",
-                message="Only one camera stream; multi-camera sync not applicable.",
-            )
-
-        root = Path(dataset_root)
-        missing: List[str] = []
-        spans: Dict[str, float] = {}
-        for feature, info in sorted(video_features.items()):
-            chunk = info.get("chunk_index")
-            file_idx = info.get("file_index")
-            if chunk is None or file_idx is None:
-                missing.append(feature)
-                continue
-            video_path = (
-                root / "videos" / feature
-                / f"chunk-{int(chunk):03d}" / f"file-{int(file_idx):03d}.mp4"
-            )
-            if not video_path.exists():
-                missing.append(feature)
-                continue
-            from_ts = info.get("from_timestamp")
-            to_ts = info.get("to_timestamp")
-            if from_ts is not None and to_ts is not None:
-                spans[feature] = float(to_ts) - float(from_ts)
-
-        details: Dict[str, Any] = {
-            "expected_streams": sorted(video_features.keys()),
-            "resolved_streams": sorted(spans.keys()),
-            "missing_streams": missing,
-            "span_drift_ratio": None,
-        }
-
-        if missing:
-            return MetricResult.make_exclude(
-                name=self.name,
-                reason="camera_stream_missing",
-                message=(
-                    f"Camera stream(s) missing or unresolvable: "
-                    f"{', '.join(missing)}. Downstream training would lose "
-                    f"these views silently."
-                ),
-                details=details,
-            )
-
-        if len(spans) >= 2:
-            vals = list(spans.values())
-            med = float(np.median(vals))
-            drift = max(abs(v - med) / med for v in vals if med > 0)
-            details["span_drift_ratio"] = round(drift, 4)
-            if drift > _TS_HARD_TOLERANCE:
-                return MetricResult.make_exclude(
-                    name=self.name,
-                    reason="camera_span_drift",
-                    message=(
-                        f"Camera stream spans diverge up to {drift:.1%} from "
-                        f"the median — views are not synchronized."
-                    ),
-                    details=details,
-                )
-
-        return MetricResult.make_pass(
-            name=self.name,
-            measurement={
-                "score_compat": 1.0,
-                "stream_count": len(spans),
-                "span_drift_ratio": details["span_drift_ratio"] or 0.0,
-            },
-            message=(
-                f"All {len(spans)} camera streams resolve with consistent spans."
-            ),
-            details=details,
-        )
+# Deprecated: use VideoStreamPresenceMetric instead.
+# Kept so that existing imports don't break during migration.
+VideoStreamSyncMetric = VideoStreamPresenceMetric

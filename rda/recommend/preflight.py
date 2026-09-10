@@ -75,7 +75,7 @@ REASON_CODE_BY_METRIC: Dict[str, str] = {
     # (re-record) rather than INVALID; timeline misalignment likewise
     # (re-export from source).
     "video_freeze": "REPAIRABLE",
-    "video_stream_sync": "REPAIRABLE",
+    "video_stream_presence": "REPAIRABLE",
     "video_timestamp_alignment": "REPAIRABLE",
     # v0.9: video_frame_integrity was computed but missing from rules.CRITICAL_METRICS
     "video_frame_integrity": "REPAIRABLE",
@@ -187,18 +187,18 @@ class PreflightAuditor:
         if include_visual:
             from rda.metrics.visual_integrity import (
                 VideoFreezeMetric,
-                VideoStreamSyncMetric,
+                VideoStreamPresenceMetric,
                 VideoTimestampAlignmentMetric,
             )
             self._metric_instances.update({
                 "video_freeze": VideoFreezeMetric(),
                 "video_timestamp_alignment": VideoTimestampAlignmentMetric(),
-                "video_stream_sync": VideoStreamSyncMetric(),
+                "video_stream_presence": VideoStreamPresenceMetric(),
             })
         else:
             self._preflight_names = [
                 n for n in self._preflight_names
-                if not n.startswith("video_") or n == "video_frame_integrity"
+                if not n.startswith("video_") or n in ("video_frame_integrity", "video_stream_presence")
             ]
 
     def evaluate(self, episode) -> EpisodeVerdictSummary:
