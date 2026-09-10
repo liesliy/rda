@@ -19,13 +19,31 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install package with UI test dependencies
-        run: pip install -e ".[ui]"
+      # Install the real runtime dependencies for every test module so
+      # nothing is silently skipped:
+      #   - [video] pulls PyAV -> req4/req10 visual audit tests actually
+      #     decode video instead of being skipped by importorskip("av")
+      #   - [ui]    pulls streamlit/plotly/pandas -> UI + acceptance tests
+      #   - numpy/pyarrow -> lerobot loader tests (importorskip numpy/pandas/
+      #     pyarrow); the heavyweight lerobot package itself is not imported
+      - name: Install package with full test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[ui,video]" numpy pyarrow pytest
 
       - name: Run tests
+        run: python -m pytest tests/ -v
+
+      - name: Fail on unexpected skips
         run: |
-          pip install pytest
-          python -m pytest tests/ -v
+          # Re-run in strict mode for the modules that used to be silently
+          # skipped when their deps were missing; CI now installs those deps,
+          # so a skip here means a regression.
+          python -m pytest tests/test_req4_visual_integrity.py \
+                           tests/test_req10_req11_visual_calibration.py \
+                           tests/test_lerobot_loader_v30_libero.py \
+                           tests/test_lerobot_task_identity.py \
+                           -v -rs --no-header -o addopts=""
 
       - name: Verify closed-source layer stays out of the wheel
         run: |
@@ -37,5 +55,6 @@ jobs:
           names = zipfile.ZipFile(wheel).namelist()
           leaked = [n for n in names if n.startswith("server/") or "engine_core" in n]
           assert not leaked, f"closed-source code leaked into wheel: {leaked}"
-          print(f"wheel clean: {len(names)} files, no server/ or engine_core")
+          assert any("ui_app" in n for n in names), "ui_app missing from wheel"
+          print(f"wheel clean: {len(names)} files, no server/ or engine_core; ui_app present")
           EOF
