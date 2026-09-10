@@ -53,6 +53,7 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
             "details": m.details,
             "message": m.message,
             "evidence_level": _evidence_level_for_metric(name),
+            "verifiability": _verifiability_for_metric(name, m),
             # Backward compat
             "passed": m.passed,
             "score": m.score,
@@ -101,7 +102,7 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
     report = {
         # Report SCHEMA version (layout of this JSON document), NOT the tool
         # version — bump when the report structure itself changes.
-        "report_schema_version": "1.0",
+        "report_schema_version": "1.1",
         "tool_version": _rda_version,
         "dataset": {
             "path": result.dataset_info.path,
@@ -123,6 +124,12 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "layer2_temporal_motion": dataset_metrics.get("temporal_motion", {}),
             "layer3_dataset_utility": dataset_metrics.get("dataset_utility", {}),
         },
+        # v0.9: Dataset Summary — aggregated statistics across all episodes
+        "dataset_summary": (
+            result.dataset_summary.to_dict().get("dataset_summary", {})
+            if result.dataset_summary is not None
+            else {}
+        ),
         "hero_metrics": hero_metrics,
         "top_observations": top_obs,
         # REQ-11 (v0.7.1): metrics that could not run because an optional
@@ -207,6 +214,7 @@ _BEHAVIOR_VERDICT_MAP: Dict[AuditVerdict, str] = {
 # Evidence labels are deliberately explicit: statistical observations must not
 # be serialized as if they were deterministic corruption.
 _EVIDENCE_LEVEL_BY_METRIC: Dict[str, str] = {
+    # Layer 1 — Integrity Gate (hard checks → EXCLUDE)
     "missing_dropout": "HARD_FAIL",
     "invalid_values": "HARD_FAIL",
     "schema_consistency": "HARD_FAIL",
@@ -216,17 +224,56 @@ _EVIDENCE_LEVEL_BY_METRIC: Dict[str, str] = {
     # REQ-4 (v0.7.0) VA-A: visual-stream integrity is hard evidence
     "video_freeze": "HARD_FAIL",
     "video_timestamp_alignment": "HARD_FAIL",
-    "video_stream_sync": "HARD_FAIL",
+    "video_stream_presence": "HARD_FAIL",
+    # Layer 2 — Trajectory Diagnostics (observational / measurement)
     "sensor_synchronization": "UNVERIFIABLE",
     "sampling_jitter": "RISK_SIGNAL",
     "velocity_acceleration": "RISK_SIGNAL",
     "action_discontinuity": "RISK_SIGNAL",
     "idle_ratio": "RISK_SIGNAL",
-    "distribution": "RISK_SIGNAL",
-    "coverage": "RISK_SIGNAL",
     # REQ-4 (v0.7.0) VA-B: visual quality is a measurement, never a veto
     "visual_quality": "RISK_SIGNAL",
+    # v0.9: split from video_stream_sync into 3 diagnostic metrics
+    "video_stream_span_consistency": "RISK_SIGNAL",
+    "video_stream_temporal_offset": "RISK_SIGNAL",
+    "video_stream_temporal_drift": "RISK_SIGNAL",
+    # Layer 3 — Dataset Profile (dataset-level, not per-episode verdict)
+    "distribution": "RISK_SIGNAL",
+    "coverage": "RISK_SIGNAL",
+    "temporal_structure": "RISK_SIGNAL",
 }
+
+
+# v0.9: Verifiability level for video-related metrics
+_VERIFIABILITY_BY_METRIC: Dict[str, str] = {
+    # Integrity Gate — binary checks
+    "video_frame_integrity": "Verified",
+    "video_freeze": "Verified",
+    "video_stream_presence": "Verified",
+    "video_timestamp_alignment": "Verified",
+    # Trajectory Diagnostics — measurements
+    "sensor_synchronization": "Measured",
+    "video_stream_span_consistency": "Measured",
+    "video_stream_temporal_offset": "Measured",
+    "video_stream_temporal_drift": "Measured",
+    "visual_quality": "Measured",
+}
+
+
+def _verifiability_for_metric(metric_name: str, m_result) -> str:
+    """Return the v0.9 verifiability level for a metric result.
+
+    Rules:
+    - Verified: check completed with a clear pass/fail result
+    - Measured: check completed, output is a numerical measurement (L2)
+    - Not verifiable: data needed for the check is unavailable
+    - N/A: check does not apply to the current data
+    """
+    if m_result.availability == MetricAvailability.NOT_AVAILABLE:
+        return "Not verifiable"
+    if m_result.availability == MetricAvailability.NA:
+        return "N/A"
+    return _VERIFIABILITY_BY_METRIC.get(metric_name, "Verified")
 
 
 def _evidence_level_for_metric(metric_name: str) -> str:

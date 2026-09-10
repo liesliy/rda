@@ -115,16 +115,18 @@ def build_summary(result: DatasetAuditResult) -> AuditSummary:
 # ---------------------------------------------------------------------------
 
 def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
-    """Format the full three-layer enhanced audit report as text.
+    """Format the full v0.9 four-section audit report as text.
 
     Sections:
         1. Header with dataset path and stats
         2. Verdict breakdown
-        3. Layer 1 — Data Integrity
-        4. Layer 2 — Temporal & Motion Anomaly
-        5. Layer 3 — Dataset Utility
+        3. Integrity Gate (L1 — hard checks)
+        4. Trajectory Diagnostics (L2 — observational measurements)
+        5. Dataset Profile (L3 — dataset-level per-episode metrics)
         6. Top Observations
         7. Hero Metrics (with N/A handling)
+        8. Video Temporal Verification (verifiability levels)
+        9. Dataset Summary (cross-episode aggregation)
     """
     dataset_metrics = aggregate_dataset_metrics(result)
     top_obs = compute_top_observations(result, dataset_metrics=dataset_metrics)
@@ -154,8 +156,8 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
         lines.append(f"  {verdict + ':':8s} {count:>3d} ({pct:>4.1f}%)")
     lines.append("")
 
-    # --- Layer 1: Data Integrity ---
-    lines.append("  ── Layer 1: Data Integrity ──")
+    # ── Integrity Gate (L1) ──
+    lines.append("  ── Integrity Gate ──")
     integrity = dataset_metrics.get("integrity", {})
     for metric_name, stats in integrity.items():
         avail = stats.get("available", 0)
@@ -163,14 +165,15 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
         failed = stats.get("failed", 0)
         na = stats.get("na", 0)
         pass_rate = stats.get("pass_rate")
+        verif = _verifiability_text_for(metric_name, stats)
         if pass_rate is not None:
-            lines.append(f"  {metric_name:24s} {passed}/{avail} pass ({pass_rate:.0%})")
+            lines.append(f"  {metric_name:28s} {verif}  {passed}/{avail} pass ({pass_rate:.0%})")
         else:
-            lines.append(f"  {metric_name:24s} N/A ({na} episodes)")
+            lines.append(f"  {metric_name:28s} {verif}  N/A ({na} episodes)")
     lines.append("")
 
-    # --- Layer 2: Temporal & Motion ---
-    lines.append("  ── Layer 2: Temporal & Motion Anomaly ──")
+    # ── Trajectory Diagnostics (L2) ──
+    lines.append("  ── Trajectory Diagnostics ──")
     temporal = dataset_metrics.get("temporal_motion", {})
 
     # Sensor sync with N/A handling
@@ -178,25 +181,36 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     sync_avail = sync.get("available_episodes", 0)
     sync_na = sync.get("na_episodes", 0)
     if sync_avail == 0:
-        lines.append(f"  sensor_synchronization    N/A ({sync_na} episodes, no stream timestamps)")
+        lines.append(f"  {'sensor_synchronization':28s} ⚠ Not verifiable  ({sync_na} episodes, no stream timestamps)")
     else:
         p95 = sync.get("worst_p95_offset_ms", {})
         median_p95 = p95.get("median", 0.0)
-        lines.append(f"  sensor_synchronization    median p95 offset = {median_p95:.1f}ms ({sync_avail}/{total} episodes)")
+        lines.append(f"  {'sensor_synchronization':28s} ✓ Measured  median p95 offset = {median_p95:.1f}ms ({sync_avail}/{total} episodes)")
+
+    # Video stream diagnostics (v0.9 split)
+    for vname in ("video_stream_span_consistency", "video_stream_temporal_offset", "video_stream_temporal_drift"):
+        vdata = temporal.get(vname, {})
+        if vdata:
+            v_avail = vdata.get("available_episodes", 0)
+            v_na = vdata.get("na_episodes", 0)
+            if v_avail == 0:
+                lines.append(f"  {vname:28s} — N/A ({v_na} episodes)")
+            else:
+                lines.append(f"  {vname:28s} ✓ Measured  ({v_avail}/{total} episodes)")
+        # If no data at all, skip (not yet computed)
 
     # Action discontinuity
     disc = temporal.get("action_discontinuity", {})
     if disc:
         if disc.get("available_episodes", 0) == 0:
             lines.append(
-                "  action_discontinuity      N/A (no action arrays — video-only dataset)"
+                f"  {'action_discontinuity':28s} — N/A (no action arrays — video-only dataset)"
             )
         else:
             total_spikes = disc.get("total_spikes", 0)
             affected = disc.get("episodes_with_spikes", 0)
             lines.append(
-                f"  action_discontinuity      {total_spikes} spikes in {affected} episodes "
-                "(RISK_SIGNAL: observational, not confirmed corruption)"
+                f"  {'action_discontinuity':28s} ✓ Measured  {total_spikes} spikes in {affected} episodes"
             )
 
     # Velocity
@@ -205,12 +219,51 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
         vel_p95 = vel.get("velocity_p95", {})
         median_v = vel_p95.get("median", 0.0)
         lines.append(
-            f"  velocity_acceleration     median velocity p95 = {median_v:.4f} "
-            "(RISK_SIGNAL: observational, not confirmed corruption)"
+            f"  {'velocity_acceleration':28s} ✓ Measured  median velocity p95 = {median_v:.4f}"
         )
 
-    # Temporal structure (v0.9: renamed from temporal_sufficiency)
-    ts = temporal.get("temporal_structure", temporal.get("temporal_sufficiency", {}))
+    # Idle ratio (L2 diagnostic in v0.9)
+    idle = temporal.get("idle_ratio", {})
+    if idle:
+        idle_med = idle.get("idle_ratio", {}).get("median", 0.0)
+        lines.append(
+            f"  {'idle_ratio':28s} ✓ Measured  median = {idle_med:.1%}"
+        )
+
+    # Visual quality
+    vq = temporal.get("visual_quality", {})
+    if vq:
+        blur_med = vq.get("median_blur_var", {}).get("median", 0.0)
+        lines.append(
+            f"  {'visual_quality':28s} ✓ Measured  median blur var = {blur_med:.1f}"
+        )
+    lines.append("")
+
+    # ── Dataset Profile (L3) ──
+    lines.append("  ── Dataset Profile ──")
+    utility = dataset_metrics.get("dataset_utility", {})
+
+    # State-space occupancy (aggregation key is "coverage")
+    sso = utility.get("coverage", {})
+    if sso:
+        if sso.get("available_episodes", 0) == 0:
+            lines.append(
+                f"  {'state_space_occupancy':28s} — N/A (no observation.state — video-only dataset)"
+            )
+        else:
+            occ = sso.get("state_space_occupancy", {})
+            median_occ = occ.get("median", 0.0)
+            lines.append(f"  {'state_space_occupancy':28s} median = {median_occ:.1%}")
+
+    # Distribution
+    dist = utility.get("distribution", {})
+    if dist:
+        dur = dist.get("duration_sec", {})
+        median_dur = dur.get("median", 0.0)
+        lines.append(f"  {'distribution':28s} median duration = {median_dur:.2f}s")
+
+    # Temporal structure (v0.9: renamed from temporal_sufficiency, moved to L3)
+    ts = utility.get("temporal_structure", utility.get("temporal_sufficiency", {}))
     if ts:
         ts_avail = ts.get("available_episodes", 0)
         if ts_avail > 0:
@@ -219,49 +272,12 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
             active_p50_med = ts.get("active_run_p50", {}).get("median", 0.0)
             vw10_med = ts.get("valid_window_ratio_10", {}).get("median", 0.0)
             lines.append(
-                f"  temporal_structure       idle_total={idle_med:.1%}, "
+                f"  {'temporal_structure':28s} idle_total={idle_med:.1%}, "
                 f"idle_prefix={prefix_med:.1%}, "
                 f"active_run_p50={active_p50_med:.0f}f, "
                 f"valid_window(seq=10)={vw10_med:.1%} "
                 f"({ts_avail}/{total} episodes)"
             )
-    lines.append("")
-
-    # --- Layer 3: Dataset Utility ---
-    lines.append("  ── Layer 3: Dataset Utility ──")
-    utility = dataset_metrics.get("dataset_utility", {})
-
-    # State-space occupancy (aggregation key is "coverage")
-    sso = utility.get("coverage", {})
-    if sso:
-        if sso.get("available_episodes", 0) == 0:
-            lines.append(
-                "  state_space_occupancy     N/A (no observation.state — video-only dataset)"
-            )
-        else:
-            occ = sso.get("state_space_occupancy", {})
-            median_occ = occ.get("median", 0.0)
-            lines.append(f"  state_space_occupancy     median = {median_occ:.1%}")
-
-    # Idle ratio / effective motion
-    idle = utility.get("idle_ratio", {})
-    if idle:
-        idle_stats = idle.get("idle_ratio", {})
-        effective_stats = idle.get("effective_motion_ratio", {})
-        median_idle = idle_stats.get("median", 0.0)
-        median_eff = effective_stats.get("median", 0.0)
-        lines.append(
-            f"  idle_ratio                median idle = {median_idle:.1%}, "
-            f"effective motion = {median_eff:.1%} "
-            "(RISK_SIGNAL: observational, not confirmed failure)"
-        )
-
-    # Distribution
-    dist = utility.get("distribution", {})
-    if dist:
-        dur = dist.get("duration_sec", {})
-        median_dur = dur.get("median", 0.0)
-        lines.append(f"  distribution              median duration = {median_dur:.2f}s")
     lines.append("")
 
     # --- Top Observations ---
@@ -321,6 +337,16 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
         )
     lines.append("")
 
+    # ── Video Temporal Verification ──
+    lines.append("  ── Video Temporal Verification ──")
+    _append_verifiability_section(lines, result, dataset_metrics)
+    lines.append("")
+
+    # ── Dataset Summary ──
+    if result.dataset_summary is not None:
+        from rda.report.dataset_summary import format_dataset_summary_text
+        lines.append(format_dataset_summary_text(result.dataset_summary))
+
     # --- EXCLUDE Episodes ---
     if compact.exclude_episodes:
         lines.append("  ── EXCLUDE Episodes ──")
@@ -333,6 +359,90 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
 
     lines.append("=" * 60)
     return "\n".join(lines)
+
+
+def _verifiability_text_for(metric_name: str, stats: dict) -> str:
+    """Return a short verifiability marker for text reports."""
+    avail = stats.get("available", 0)
+    na = stats.get("na", 0)
+    if avail == 0 and na > 0:
+        return "— N/A"
+    if avail == 0:
+        return "⚠ Not verifiable"
+    # Video-related L2 diagnostics use "Measured"
+    video_measured = {
+        "sensor_synchronization",
+        "video_stream_span_consistency",
+        "video_stream_temporal_offset",
+        "video_stream_temporal_drift",
+        "visual_quality",
+    }
+    if metric_name in video_measured:
+        return "✓ Measured"
+    return "✓ Verified"
+
+
+def _append_verifiability_section(
+    lines: List[str],
+    result: DatasetAuditResult,
+    dataset_metrics: Dict[str, Any],
+) -> None:
+    """Append the Video Temporal Verification block."""
+    # Collect verifiability from per-episode results
+    video_metrics = [
+        "video_stream_presence",
+        "video_stream_span_consistency",
+        "video_stream_temporal_offset",
+        "video_stream_temporal_drift",
+        "video_frame_integrity",
+    ]
+
+    # Determine status for each metric across the dataset
+    status_map: Dict[str, str] = {}
+    for m_name in video_metrics:
+        found_verified = False
+        found_measured = False
+        found_na = False
+        found_not_verifiable = False
+
+        for ep in result.episodes.values():
+            m = ep.metrics.get(m_name)
+            if m is None:
+                continue
+            from rda.metrics.base import MetricAvailability
+            if m.availability == MetricAvailability.AVAILABLE:
+                if m_name in ("video_stream_span_consistency", "video_stream_temporal_offset", "video_stream_temporal_drift"):
+                    found_measured = True
+                else:
+                    found_verified = True
+            elif m.availability == MetricAvailability.NA:
+                found_na = True
+            elif m.availability == MetricAvailability.NOT_AVAILABLE:
+                found_not_verifiable = True
+
+        if found_verified:
+            status_map[m_name] = "✓ Verified"
+        elif found_measured:
+            status_map[m_name] = "✓ Measured"
+        elif found_not_verifiable:
+            status_map[m_name] = "⚠ Not verifiable"
+        elif found_na:
+            status_map[m_name] = "— N/A"
+        else:
+            status_map[m_name] = "— N/A"
+
+    display_names = {
+        "video_stream_presence": "Camera presence",
+        "video_stream_span_consistency": "Stream coverage",
+        "video_stream_temporal_offset": "Frame-level synchronization",
+        "video_stream_temporal_drift": "Temporal drift",
+        "video_frame_integrity": "Frame integrity",
+    }
+
+    for m_name in video_metrics:
+        label = display_names.get(m_name, m_name)
+        status = status_map.get(m_name, "— N/A")
+        lines.append(f"  {label:30s} {status}")
 
 
 # Keep old name for backward compat
