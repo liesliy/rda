@@ -249,6 +249,25 @@ def compute_behavior_severity(
                     "measurement_value": spikes,
                 })
 
+        elif m.name == "sampling_jitter":
+            jr = meas.get("jitter_ratio", 0.0)
+            if jr > 0.3:
+                severity += 30
+                findings.append({
+                    "metric": "sampling_jitter",
+                    "severity": 30,
+                    "reason": f"Jitter ratio {jr:.2f} > 0.3: severe sampling irregularity",
+                    "measurement_value": jr,
+                })
+            elif jr > 0.1:
+                severity += 10
+                findings.append({
+                    "metric": "sampling_jitter",
+                    "severity": 10,
+                    "reason": f"Jitter ratio {jr:.2f} > 0.1: moderate sampling irregularity",
+                    "measurement_value": jr,
+                })
+
         # v0.9 fix: was reading occupancy_rate from 'distribution' metric,
         # but occupancy_rate is a field of the 'coverage' metric.
         elif m.name == "coverage":
