@@ -417,6 +417,84 @@ def example() -> None:
 # recommend subcommand
 # ---------------------------------------------------------------------------
 
+def _extract_audit_signals_from_report(report_dict: dict) -> dict:
+    """Extract audit signals from a pre-computed audit report JSON.
+
+    Reads per-episode metric measurements from the report and computes
+    compact summaries for smoothness, calibration and coverage signals.
+    These are sent to the recommendation API so the server-side engine
+    can factor them into recommendation rules.
+    """
+    signals: dict = {}
+
+    episodes = report_dict.get("episodes", {})
+    if not episodes:
+        return signals
+
+    spike_counts: list[int] = []
+    jerk_p95_values: list[float] = []
+    sync_p95_values: list[float] = []
+    occupancy_values: list[float] = []
+
+    for _ep_key, ep_data in episodes.items():
+        measurements = ep_data.get("measurements", {})
+
+        # action_discontinuity → smoothness
+        disc = measurements.get("action_discontinuity", {})
+        if disc:
+            sc = disc.get("spike_count", 0)
+            spike_counts.append(sc)
+            jerk = disc.get("jerk_p95")
+            if jerk is not None:
+                jerk_p95_values.append(float(jerk))
+
+        # sensor_synchronization → calibration
+        sync = measurements.get("sensor_synchronization", {})
+        if sync:
+            offset = sync.get("worst_p95_offset_ms")
+            if offset is not None:
+                sync_p95_values.append(float(offset))
+
+        # coverage → coverage_summary
+        cov = measurements.get("coverage", {})
+        if cov:
+            occ = cov.get("occupancy_rate")
+            if occ is not None:
+                occupancy_values.append(float(occ))
+
+    if spike_counts:
+        signals["smoothness_summary"] = {
+            "total_spikes": sum(spike_counts),
+            "episodes_with_spikes": sum(1 for s in spike_counts if s > 0),
+            "total_episodes": len(spike_counts),
+            "jerk_p95_median": (
+                sorted(jerk_p95_values)[len(jerk_p95_values) // 2]
+                if jerk_p95_values else None
+            ),
+        }
+
+    if sync_p95_values:
+        sorted_sync = sorted(sync_p95_values)
+        n = len(sorted_sync)
+        signals["calibration_summary"] = {
+            "median_worst_p95_offset_ms": sorted_sync[n // 2],
+            "max_worst_p95_offset_ms": sorted_sync[-1],
+            "total_episodes": n,
+        }
+
+    if occupancy_values:
+        sorted_occ = sorted(occupancy_values)
+        n = len(sorted_occ)
+        signals["coverage_summary"] = {
+            "median_occupancy": sorted_occ[n // 2],
+            "min_occupancy": sorted_occ[0],
+            "max_occupancy": sorted_occ[-1],
+            "total_episodes": n,
+        }
+
+    return signals
+
+
 @cli.command(
     "recommend",
     short_help="Generate data optimization recommendations.",
@@ -473,10 +551,21 @@ def example() -> None:
     type=click.IntRange(2, 200),
     default=None,
     help=(
-        "Action chunk size of your target policy (REQ-3, DROID-aligned). "
+        "Action chunk size of the target policy (REQ-3, DROID-aligned). "
         "Valid-window and tail-trim evaluation is aligned to this length "
         "instead of the legacy fixed tiers. E.g. 100 for ACT, 16 for "
         "Diffusion Policy."
+    ),
+)
+@click.option(
+    "--audit-report",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Path to a pre-computed RDA audit report JSON (from 'rda audit'). "
+        "When provided, diagnostic audit signals (smoothness, calibration, "
+        "coverage) are extracted and sent to the recommendation API for "
+        "more informed suggestions (v0.9)."
     ),
 )
 @click.option(
@@ -494,6 +583,7 @@ def recommend(
     lang: str,
     offline: bool,
     policy_chunk_size: Optional[int],
+    audit_report: Optional[Path],
     verbose: bool,
 ) -> None:
     """Generate data optimization recommendations for the dataset at PATH.
@@ -525,6 +615,7 @@ def recommend(
       rda recommend /path/to/dataset --policy temporal
       rda recommend /path/to/dataset --lang en --format json -o rec.json
       rda recommend /path/to/dataset --offline   (never contacts the API)
+      rda recommend /path/to/dataset --audit-report rda_report.json  (v0.9: send audit signals)
 
     \b
     Environment:
@@ -562,6 +653,25 @@ def recommend(
         )
         click.echo("")
 
+    # --- Load audit signals from pre-computed report (v0.9) ---
+    audit_signals = None
+    if audit_report is not None:
+        import json as _json
+        try:
+            report_data = _json.loads(Path(audit_report).read_text(encoding="utf-8"))
+            audit_signals = _extract_audit_signals_from_report(report_data)
+            if verbose and audit_signals:
+                signal_names = ", ".join(audit_signals.keys())
+                click.echo(f"Audit signals extracted: {signal_names}")
+            elif verbose:
+                click.echo("Audit report loaded but no diagnostic signals found.")
+        except Exception as e:
+            click.echo(
+                f"Warning: Failed to load audit report '{audit_report}': {e}. "
+                "Proceeding without audit signals.",
+                err=True,
+            )
+
     # --- Run recommendation engine ---
     try:
         episode_iter = iter_episodes(path_str)
@@ -578,6 +688,7 @@ def recommend(
             lang=lang,
             offline=offline,
             policy_chunk_size=policy_chunk_size,
+            audit_signals=audit_signals,
         )
     except Exception as e:
         click.echo(f"Error: Recommendation failed: {e}", err=True)

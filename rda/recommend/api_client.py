@@ -50,7 +50,8 @@ CACHE_TTL_DAYS = 30
 REQUEST_TIMEOUT = 30  # seconds
 # REQ-1 (v0.5.9): payload contract version. v2 adds verdict_summary;
 # the server reads it only when >= 2, so v1 servers ignore it safely.
-CONTRACT_VERSION = 3
+# v4 (v0.9.0): adds audit_signals (smoothness / calibration / coverage).
+CONTRACT_VERSION = 4
 
 
 def get_api_url() -> str:
@@ -68,6 +69,7 @@ def _cache_key(
     lang: str = "zh",
     verdict_summary: Optional[Dict[str, Any]] = None,
     policy_chunk_size: Optional[int] = None,
+    audit_signals: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Generate a stable cache key from metrics + policy + language.
 
@@ -77,6 +79,10 @@ def _cache_key(
     the new DROID-aligned retention metrics. NOTE: no colon in the
     prefix — colons are reserved characters on Windows and a
     "v2:<hash>" filename silently fails to write there.
+
+    v4 (v0.9.0): audit_signals (smoothness / calibration / coverage)
+    participate in the key so that different diagnostic profiles don't
+    collide on the same temporal sufficiency hash.
     """
     ts_dict = temporal_sufficiency.to_dict()
     # Sort keys for stable hash
@@ -87,12 +93,13 @@ def _cache_key(
             "ts": ts_dict,
             "vs": verdict_summary or {},
             "pcs": policy_chunk_size,
+            "as": audit_signals or {},
         },
         sort_keys=True,
         default=str,
     )
     digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
-    return f"v3-{digest}"
+    return f"v4-{digest}"
 
 
 def _cache_path(key: str) -> Path:
@@ -190,6 +197,105 @@ def compute_local_metrics(
 
 
 # ---------------------------------------------------------------------------
+# Audit signals extraction (v0.9)
+# ---------------------------------------------------------------------------
+
+def extract_audit_signals(audit_result) -> Dict[str, Any]:
+    """Extract aggregated diagnostic signals from a DatasetAuditResult.
+
+    Computes compact summaries for three v0.9 diagnostic dimensions:
+      - smoothness_summary: from action_discontinuity measurements
+      - calibration_summary: from sensor_synchronization measurements
+      - coverage_summary: from coverage (state-space occupancy) measurements
+
+    These are sent to the recommendation API so the server-side engine
+    can factor them into recommendation rules (e.g. SMOOTHING_REVIEW,
+    CALIBRATION_CHECK, COVERAGE_SUGGESTION).
+
+    Args:
+        audit_result: A DatasetAuditResult from the audit pipeline.
+
+    Returns:
+        Dict with three optional sub-dicts. Missing data yields empty dicts.
+    """
+    signals: Dict[str, Any] = {}
+
+    if audit_result is None or not hasattr(audit_result, "episodes"):
+        return signals
+
+    # Collect per-episode measurements
+    spike_counts: List[int] = []
+    jerk_p95_values: List[float] = []
+    sync_p95_values: List[float] = []
+    occupancy_values: List[float] = []
+
+    for ep_result in audit_result.episodes.values():
+        # EpisodeAuditResult.metrics is Dict[str, MetricResult]
+        metrics = getattr(ep_result, "metrics", {})
+
+        # action_discontinuity
+        disc = metrics.get("action_discontinuity")
+        if disc is not None:
+            measurement = getattr(disc, "measurement", {}) or {}
+            sc = measurement.get("spike_count", 0)
+            spike_counts.append(sc)
+            jerk = measurement.get("jerk_p95")
+            if jerk is not None:
+                jerk_p95_values.append(float(jerk))
+
+        # sensor_synchronization
+        sync = metrics.get("sensor_synchronization")
+        if sync is not None:
+            measurement = getattr(sync, "measurement", {}) or {}
+            offset = measurement.get("worst_p95_offset_ms")
+            if offset is not None:
+                sync_p95_values.append(float(offset))
+
+        # coverage (state-space occupancy)
+        cov = metrics.get("coverage")
+        if cov is not None:
+            measurement = getattr(cov, "measurement", {}) or {}
+            occ = measurement.get("occupancy_rate")
+            if occ is not None:
+                occupancy_values.append(float(occ))
+
+    # Build smoothness_summary
+    if spike_counts:
+        signals["smoothness_summary"] = {
+            "total_spikes": sum(spike_counts),
+            "episodes_with_spikes": sum(1 for s in spike_counts if s > 0),
+            "total_episodes": len(spike_counts),
+            "jerk_p95_median": (
+                sorted(jerk_p95_values)[len(jerk_p95_values) // 2]
+                if jerk_p95_values else None
+            ),
+        }
+
+    # Build calibration_summary
+    if sync_p95_values:
+        sorted_sync = sorted(sync_p95_values)
+        n = len(sorted_sync)
+        signals["calibration_summary"] = {
+            "median_worst_p95_offset_ms": sorted_sync[n // 2],
+            "max_worst_p95_offset_ms": sorted_sync[-1],
+            "total_episodes": n,
+        }
+
+    # Build coverage_summary
+    if occupancy_values:
+        sorted_occ = sorted(occupancy_values)
+        n = len(sorted_occ)
+        signals["coverage_summary"] = {
+            "median_occupancy": sorted_occ[n // 2],
+            "min_occupancy": sorted_occ[0],
+            "max_occupancy": sorted_occ[-1],
+            "total_episodes": n,
+        }
+
+    return signals
+
+
+# ---------------------------------------------------------------------------
 # API call
 # ---------------------------------------------------------------------------
 
@@ -201,6 +307,7 @@ def _call_api(
     lang: str = "zh",
     verdict_summary: Optional[Dict[str, Any]] = None,
     policy_chunk_size: Optional[int] = None,
+    audit_signals: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Call the remote recommendation API.
 
@@ -240,11 +347,16 @@ def _call_api(
     if policy_chunk_size is not None:
         body["policy_chunk_size"] = int(policy_chunk_size)
 
+    # v0.9: audit_signals for SMOOTHING_REVIEW / CALIBRATION_CHECK /
+    # COVERAGE_SUGGESTION rules. v1/v2/v3 servers ignore unknown keys.
+    if audit_signals:
+        body["audit_signals"] = audit_signals
+
     resp = requests.post(
         f"{api_url}/api/v1/recommend",
         json=body,
         timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": f"rda-cli/0.8.0"},
+        headers={"User-Agent": f"rda-cli/0.9.0"},
     )
 
     if resp.status_code == 429:
@@ -275,7 +387,7 @@ def _get_remote_rules_version() -> Optional[str]:
         resp = requests.get(
             f"{get_api_url()}/api/v1/health",
             timeout=10,
-            headers={"User-Agent": "rda-cli/0.8.0"},
+            headers={"User-Agent": "rda-cli/0.9.0"},
         )
         if resp.status_code == 200:
             return resp.json().get("rules_version")
@@ -297,6 +409,7 @@ def run_recommendation(
     lang: str = "zh",
     offline: bool = False,
     policy_chunk_size: Optional[int] = None,
+    audit_signals: Optional[Dict[str, Any]] = None,
 ) -> RecommendationResult:
     """Run the full recommendation pipeline.
 
@@ -326,6 +439,11 @@ def run_recommendation(
             policy (REQ-3, DROID-aligned). When provided, the server
             aligns valid-window and tail-trim rules to this chunk
             length; None keeps the legacy fixed window tiers.
+        audit_signals: Optional dict of aggregated diagnostic signals
+            from the v0.9 audit pipeline (smoothness_summary,
+            calibration_summary, coverage_summary). Sent to the server
+            so it can trigger SMOOTHING_REVIEW / CALIBRATION_CHECK /
+            COVERAGE_SUGGESTION rules. Older servers ignore this field.
 
     Returns:
         RecommendationResult with recommendations and rules_version.
@@ -361,8 +479,8 @@ def run_recommendation(
         )
         return gate_result_by_verdict(result, verdict_summary, lang=lang)
 
-    # Step 2: Check cache (v3 keys include verdict + chunk size)
-    key = _cache_key(agg, policy_name, lang, verdict_payload, policy_chunk_size)
+    # Step 2: Check cache (v4 keys include audit signals)
+    key = _cache_key(agg, policy_name, lang, verdict_payload, policy_chunk_size, audit_signals)
     cached = _read_cache(key)
 
     # Step 3: Try API
@@ -378,6 +496,7 @@ def run_recommendation(
             lang=lang,
             verdict_summary=verdict_payload,
             policy_chunk_size=policy_chunk_size,
+            audit_signals=audit_signals,
         )
     except ImportError as e:
         api_error = str(e)
