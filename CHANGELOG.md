@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.1 - 2026-09-10
+
+Patch release fixing two latent bugs surfaced by the new golden
+regression set, plus the golden set itself.
+
+### Fixed
+- `rda.report.json_report`: `_verifiability_for_metric` referenced
+  `MetricAvailability.NA`, an enum member that does not exist
+  (the enum only defines `AVAILABLE` / `NOT_AVAILABLE` /
+  `ERROR`). Any available metric crashed report generation with
+  `AttributeError`. N/A is now derived from the not-available
+  reason (`single_camera`, `no_video_features`, `dep_*`); other
+  unavailable metrics report "Not verifiable".
+- `rda.metrics.temporal`: `SamplingJitterMetric` pass path omitted
+  `jitter_ratio` from its measurement, so
+  `compute_behavior_severity` never saw it and the sampling-jitter
+  behavior diagnostic could never fire. `jitter_ratio` (= CV) is
+  now emitted on every path.
+
+### Added — tests
+- `tests/golden/`: deterministic golden dataset — 7 non-video and 4
+  PyAV-synthesized video episodes with pinned verdicts and
+  must-trigger metrics, covering all four audit layers (Integrity
+  Gate / Trajectory Diagnostics / Dataset Profile / Dataset
+  Summary).
+- `tests/test_golden_regression.py`: end-to-end regression guards —
+  verdict per scenario, must-trigger metrics, diagnostics never
+  escalate to hard excludes, N/A behaviour without video,
+  verifiability fields, dataset aggregation, and a pinned verdict
+  distribution.
+
 ## 0.9.0 - 2026-09-10
 
 Four-layer audit architecture: Integrity Gate → Trajectory Diagnostics →
