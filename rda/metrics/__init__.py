@@ -103,7 +103,7 @@ rather than per-episode motion anomalies."""
 ALL_METRICS: List[Type[MetricBase]] = LAYER1_INTEGRITY + LAYER2_TEMPORAL_MOTION + LAYER3_DATASET_UTILITY
 """All metric classes, in architectural layer order.
 
-v0.9: grew from 18 to 20 with the video_stream_sync split into
+v0.9: grew from 18 to 21 with the video_stream_sync split into
 4 independent metrics (1 L1 + 3 L2)."""
 
 # ---------------------------------------------------------------------------
