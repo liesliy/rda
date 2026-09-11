@@ -238,3 +238,32 @@ def test_verdict_distribution_is_stable(catalog):
         # +4 video scenarios: 1 pass, 3 exclude.
         assert dist == {AuditVerdict.PASS: 5, AuditVerdict.REVIEW: 1,
                         AuditVerdict.EXCLUDE: 5}, dist
+
+
+def test_text_report_renders_without_video(catalog):
+    """Regression (post-0.9.1): the text/enhanced summary report must not
+    crash on datasets with no video. The verifiability section iterates
+    over video metrics that are NOT_AVAILABLE; the text path previously
+    referenced the nonexistent MetricAvailability.NA member and raised
+    AttributeError (the JSON path had been fixed in 0.9.1 but the text
+    path shipped broken)."""
+    from rda.io.schema import DatasetInfo
+    from rda.audit.dataset_audit import DatasetAuditor
+    from rda.report.summary import format_enhanced_summary_text
+
+    scenarios = [s for s in catalog[0] if not s.video]
+    info = DatasetInfo(
+        path="golden://dataset",
+        num_episodes=len(scenarios),
+        total_frames=sum(s.builder().num_frames for s in scenarios),
+        modalities=["state"],
+        action_keys=["joint_pos"],
+        meta={"fps": 10},
+    )
+    result = DatasetAuditor().audit_dataset(
+        info, iter(s.builder() for s in scenarios)
+    )
+    text = format_enhanced_summary_text(result)
+    assert isinstance(text, str) and len(text) > 100
+    # video metrics are N/A (not applicable) on a video-less dataset
+    assert "N/A" in text

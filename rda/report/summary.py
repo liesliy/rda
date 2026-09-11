@@ -415,10 +415,22 @@ def _append_verifiability_section(
                     found_measured = True
                 else:
                     found_verified = True
-            elif m.availability == MetricAvailability.NA:
-                found_na = True
             elif m.availability == MetricAvailability.NOT_AVAILABLE:
-                found_not_verifiable = True
+                # N/A vs "Not verifiable" depends on WHY the metric is
+                # unavailable: metric not applicable to this episode
+                # (single camera, no video) => N/A; metric should apply but
+                # required inputs are missing/errored => Not verifiable.
+                # MetricAvailability has no NA member (only AVAILABLE /
+                # NOT_AVAILABLE / ERROR).
+                reason = ""
+                try:
+                    reason = (m.assessment or {}).get("reason") or ""
+                except Exception:
+                    reason = ""
+                if reason in ("single_camera", "no_video_features"):
+                    found_na = True
+                else:
+                    found_not_verifiable = True
 
         if found_verified:
             status_map[m_name] = "✓ Verified"
