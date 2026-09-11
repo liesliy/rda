@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.9.2 - 2026-09-11
+
+Governance-driven metric refinements based on semantic invariant
+review and independent re-implementation audit.
+
+### Changed
+- `rda.metrics.integrity.MissingFramesMetric` (D-02): Sensor dropout
+  / frame-length mismatch now returns **EXCLUDE** instead of REVIEW,
+  matching spec §4.1 which mandates hard exclusion for data with
+  missing frames (downstream frame-index training would misalign).
+- `rda.metrics.motion.JointLimitMetric` (D-14): Replaced binary
+  pass/review with **three-level classification**:
+  - **PASS** – all frames within limits; inter-frame jumps normal.
+  - **REVIEW** – any frame within `approach_threshold` (±2%) of a
+    limit boundary, or ≥ `consecutive_frames` (3) consecutive frames
+    glued to a boundary.
+  - **EXCLUDE** – any frame actually exceeds a limit, or inter-frame
+    jump exceeds `jump_multiplier` (2×) the theoretical max increment.
+  - New measurement outputs: `min_margin_ratio`, `max_jump_ratio`.
+  - Constructor accepts `approach_threshold`, `consecutive_frames`,
+    `jump_multiplier` (all with sensible defaults).
+
+### Fixed
+- `rda.metrics.integrity.MissingFramesMetric`: `make_exclude()` call
+  passed unsupported `measurement` and `severity` keyword arguments,
+  causing a `TypeError` whenever dropout was detected.
+
+### Added — tests
+- New golden scenario `joint_limit_approaching`: smooth Gaussian bump
+  approaching the limit boundary without exceeding it, verifying the
+  REVIEW path of the three-level classifier.
+- Updated `test_joint_limit_three_level_classification` to assert
+  both EXCLUDE (actual violation) and REVIEW (approaching boundary).
+- Pinned verdict distribution updated: 4 PASS / 1 REVIEW / 3 EXCLUDE
+  (non-video); 5 PASS / 1 REVIEW / 6 EXCLUDE (with video).
+
 ## 0.9.1 - 2026-09-10
 
 Patch release fixing two latent bugs surfaced by the new golden

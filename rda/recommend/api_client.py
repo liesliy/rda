@@ -356,7 +356,7 @@ def _call_api(
         f"{api_url}/api/v1/recommend",
         json=body,
         timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": f"rda-cli/0.9.1"},
+        headers={"User-Agent": f"rda-cli/0.9.2"},
     )
 
     if resp.status_code == 429:
@@ -387,7 +387,7 @@ def _get_remote_rules_version() -> Optional[str]:
         resp = requests.get(
             f"{get_api_url()}/api/v1/health",
             timeout=10,
-            headers={"User-Agent": "rda-cli/0.9.1"},
+            headers={"User-Agent": "rda-cli/0.9.2"},
         )
         if resp.status_code == 200:
             return resp.json().get("rules_version")
