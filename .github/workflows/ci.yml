@@ -20,7 +20,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install package with all dependencies
-        run: pip install -e ".[ui,video]" pyarrow
+        run: pip install -e ".[ui,video]" pyarrow pytest pytest-cov
 
       - name: Run invariant guard tests (gate check)
         run: |
