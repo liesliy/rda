@@ -138,13 +138,11 @@ class MissingFramesMetric(MetricBase):
             if dropout_count > 0:
                 parts.append(f"{dropout_count} feature(s) with dropout")
             msg = "Detected: " + "; ".join(parts) + "."
-            return MetricResult.make_review(
+            return MetricResult.make_exclude(
                 name=self.name,
-                measurement={"score_compat": 0.0, "missing_frames": missing_count, "dropout_count": dropout_count},
                 reason="; ".join(parts),
                 message=msg,
                 details=details,
-                severity="high",
             )
 
 

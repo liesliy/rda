@@ -113,12 +113,11 @@ def _sc_nan_values() -> EpisodeData:
 
 
 def _sc_joint_limit_violation() -> EpisodeData:
-    """Critical metric REVIEW: joint command exceeds mechanical limit.
+    """D-14 EXCLUDE: joint value exceeds declared mechanical limit.
 
-    JointLimitMetric reads ``observation.state`` (not action) and emits a
-    REVIEW-level finding for a large run of violations (>5 frames). This is
-    a critical metric but reports review status, so the verdict is REVIEW
-    (not EXCLUDE).
+    JointLimitMetric reads ``observation.state`` (not action) and emits an
+    EXCLUDE-level finding when any frame is beyond the limit boundary.
+    Value 5.0 is well beyond the ±2.0 limit -> EXCLUDE.
     """
     ep = _clean_episode()
     violation = 5.0  # well beyond ±2
@@ -128,6 +127,31 @@ def _sc_joint_limit_violation() -> EpisodeData:
         a[45:70, 3] = violation
         store[key] = a
     ep.meta["joint_limits"] = _joint_limits_meta()["joint_limits"]
+    return ep
+
+
+def _sc_joint_limit_approaching() -> EpisodeData:
+    """D-14 REVIEW: joint values approach but do not exceed limits.
+
+    Replace joint 3 with a smooth Gaussian bump that peaks near the limit
+    boundary (1.95) and smoothly returns to baseline, ensuring:
+    - margin_ratio < 0.02 near the peak -> triggers REVIEW
+    - No frame actually exceeds the limit -> no EXCLUDE from violations
+    - Inter-frame jumps stay small (smooth Gaussian) -> no EXCLUDE from jumps
+    """
+    ep = _clean_episode()
+    limits = _joint_limits_meta()["joint_limits"]
+    for store in (ep.observation, ep.action):
+        key = "state" if store is ep.observation else "joint_pos"
+        a = store[key].copy()
+        # Smooth Gaussian bump centered at frame 60, peak=1.95, sigma=15
+        # This ensures max jump is small and the peak is within 2% of 2.0 limit
+        baseline = 0.25  # approximate mean of original signal
+        amplitude = 1.70  # peak = baseline + amplitude = 1.95
+        for i in range(N_FRAMES):
+            a[i, 3] = baseline + amplitude * np.exp(-0.5 * ((i - 60) / 15.0) ** 2)
+        store[key] = a
+    ep.meta["joint_limits"] = limits
     return ep
 
 
@@ -215,8 +239,15 @@ NON_VIDEO_SCENARIOS: List[GoldenScenario] = [
     ),
     GoldenScenario(
         id="joint_limit_violation",
-        description="Joint command exceeds declared mechanical limit (critical metric, REVIEW-level).",
+        description="Joint command exceeds declared mechanical limit (D-14: actual violation -> EXCLUDE).",
         builder=_sc_joint_limit_violation,
+        expected_verdict="exclude",
+        must_trigger=("joint_limit",),
+    ),
+    GoldenScenario(
+        id="joint_limit_approaching",
+        description="D-14 REVIEW: joint values approach limit boundary (within 2%) but do not exceed.",
+        builder=_sc_joint_limit_approaching,
         expected_verdict="review",
         must_trigger=("joint_limit",),
     ),

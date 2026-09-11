@@ -97,14 +97,77 @@ def _mad(values: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 class JointLimitMetric(MetricBase):
+    """Three-level joint-limit check (D-14).
+
+    Classification
+    --------------
+    PASS    – all frames inside limits; inter-frame jumps normal.
+    REVIEW  – any frame within ``approach_threshold`` (±2 %) of a limit
+              boundary, OR >= ``consecutive_frames`` consecutive frames
+              glued to a boundary.
+    EXCLUDE – any frame actually exceeds a limit, OR inter-frame jump
+              exceeds ``jump_multiplier`` x theoretical max increment.
+
+    Configurable parameters
+    -----------------------
+    approach_threshold : float = 0.02
+        Fraction of full range considered "approaching".
+    consecutive_frames : int = 3
+        Minimum consecutive frames at boundary for REVIEW.
+    jump_multiplier : float = 2.0
+        Jump / theoretical-max-increment ratio above which -> EXCLUDE.
+    """
+
     name = "joint_limit"
-    description = "Detect joint positions exceeding mechanical limits."
+    description = "Three-level joint-limit check: PASS / REVIEW / EXCLUDE."
+
+    def __init__(
+        self,
+        approach_threshold: float = 0.02,
+        consecutive_frames: int = 3,
+        jump_multiplier: float = 2.0,
+    ) -> None:
+        self.approach_threshold = approach_threshold
+        self.consecutive_frames = consecutive_frames
+        self.jump_multiplier = jump_multiplier
+
+    # ----- helpers --------------------------------------------------------
+
+    @staticmethod
+    def _max_consecutive_run(mask: np.ndarray) -> int:
+        """Return length of the longest True-run in a boolean array."""
+        if mask.size == 0:
+            return 0
+        changes = np.diff(mask.astype(np.int8))
+        starts = np.where(changes == 1)[0] + 1
+        ends = np.where(changes == -1)[0] + 1
+        # Handle edge: starts with True
+        if mask[0]:
+            starts = np.concatenate([[0], starts])
+        # Handle edge: ends with True
+        if mask[-1]:
+            ends = np.concatenate([ends, [len(mask)]])
+        if len(starts) == 0 or len(ends) == 0:
+            return 0
+        n = min(len(starts), len(ends))
+        if n == 0:
+            return 0
+        runs = ends[:n] - starts[:n]
+        return int(runs.max()) if runs.size else 0
+
+    # ----- main compute ---------------------------------------------------
 
     def compute(self, episode: EpisodeData) -> MetricResult:
         details: Dict[str, Any] = {
             "violations": 0,
+            "approaching": 0,
             "by_joint": {},
             "joints_checked": 0,
+            "approach_threshold_used": self.approach_threshold,
+            "consecutive_frames_used": self.consecutive_frames,
+            "jump_multiplier_used": self.jump_multiplier,
+            "min_margin_ratio": 1.0,
+            "max_jump_ratio": 0.0,
         }
 
         limits = episode.meta.get("joint_limits")
@@ -133,7 +196,7 @@ class JointLimitMetric(MetricBase):
                 details=details,
             )
 
-        n_joints_state = state_arr.shape[1]
+        n_frames, n_joints_state = state_arr.shape
         n_joints_limits = len(limits)
         n_checked = min(n_joints_state, n_joints_limits)
         details["joints_checked"] = n_checked
@@ -146,55 +209,154 @@ class JointLimitMetric(MetricBase):
                 details=details,
             )
 
+        # Velocity limits for jump detection (optional metadata)
+        velocity_limits = episode.meta.get("velocity_limits")
+
         total_violations = 0
-        by_joint: Dict[str, int] = {}
+        total_approaching = 0
+        by_joint: Dict[str, Any] = {}
+        global_min_margin = 1.0
+        global_max_jump_ratio = 0.0
 
         for j in range(n_checked):
             low, high = limits[j]
-            col = state_arr[:, j]
-            viol_mask = (col < low) | (col > high)
-            count = int(viol_mask.sum())
-            if count > 0:
-                by_joint[f"joint_{j}"] = count
-                total_violations += count
+            joint_range = high - low
+            if joint_range <= 0:
+                continue
+
+            col = state_arr[:, j].astype(np.float64)
+
+            # margin_ratio: distance to nearest boundary as fraction of range
+            #   > 0 means inside, < 0 means outside, 0 means exactly at boundary
+            margin_low = (col - low) / joint_range
+            margin_high = (high - col) / joint_range
+            margin_ratio = np.minimum(margin_low, margin_high)
+
+            frame_min_margin = float(np.min(margin_ratio))
+            if frame_min_margin < global_min_margin:
+                global_min_margin = frame_min_margin
+
+            # --- violation: any frame beyond limit ---
+            violation_mask = margin_ratio < 0.0
+            violation_count = int(violation_mask.sum())
+
+            # --- approaching: within threshold but not yet violated ---
+            approaching_mask = (margin_ratio >= 0.0) & (margin_ratio < self.approach_threshold)
+            approaching_count = int(approaching_mask.sum())
+
+            # --- consecutive at boundary (margin < 0.001 = 0.1% of range) ---
+            at_boundary = margin_ratio < 0.001
+            max_consec = self._max_consecutive_run(at_boundary)
+
+            # --- inter-frame jump detection ---
+            max_jump_ratio_j = 0.0
+            if n_frames > 1:
+                diffs = np.abs(np.diff(col))
+                max_jump = float(np.max(diffs))
+                # Theoretical max increment from velocity_limits or fallback
+                if velocity_limits is not None and j < len(velocity_limits):
+                    v_limit = float(velocity_limits[j])
+                    fps = float(episode.meta.get("fps", 10.0))
+                    dt = 1.0 / fps if fps > 0 else 0.1
+                    max_theoretical_jump = v_limit * dt
+                else:
+                    # Fallback: assume max velocity = joint_range per second
+                    fps = float(episode.meta.get("fps", 10.0))
+                    dt = 1.0 / fps if fps > 0 else 0.1
+                    max_theoretical_jump = joint_range * dt
+                if max_theoretical_jump > 0:
+                    max_jump_ratio_j = max_jump / max_theoretical_jump
+                if max_jump_ratio_j > global_max_jump_ratio:
+                    global_max_jump_ratio = max_jump_ratio_j
+
+            # Per-joint record (only if noteworthy)
+            if violation_count > 0 or approaching_count > 0 or max_consec >= self.consecutive_frames:
+                by_joint[f"joint_{j}"] = {
+                    "violations": violation_count,
+                    "approaching": approaching_count,
+                    "max_consecutive_at_boundary": max_consec,
+                    "max_jump_ratio": round(max_jump_ratio_j, 4),
+                    "min_margin": round(frame_min_margin, 6),
+                }
+
+            total_violations += violation_count
+            total_approaching += approaching_count
 
         details["violations"] = total_violations
+        details["approaching"] = total_approaching
         details["by_joint"] = by_joint
+        details["min_margin_ratio"] = round(global_min_margin, 6)
+        details["max_jump_ratio"] = round(global_max_jump_ratio, 4)
 
-        if total_violations == 0:
-            msg = f"No joint-limit violations across {n_checked} joint(s)."
-            return MetricResult.make_pass(
+        measurement = {
+            "score_compat": 1.0 if (total_violations == 0 and total_approaching == 0) else 0.0,
+            "violations": total_violations,
+            "approaching": total_approaching,
+            "joints_checked": n_checked,
+            "min_margin_ratio": round(global_min_margin, 6),
+            "max_jump_ratio": round(global_max_jump_ratio, 4),
+        }
+
+        # === EXCLUDE: actual violations or excessive jumps ===
+        if total_violations > 0 or global_max_jump_ratio > self.jump_multiplier:
+            parts: List[str] = []
+            if total_violations > 0:
+                parts.append(f"{total_violations} frame(s) exceeding joint limits")
+            if global_max_jump_ratio > self.jump_multiplier:
+                parts.append(
+                    f"max inter-frame jump {global_max_jump_ratio:.1f}x "
+                    f"theoretical max"
+                )
+            msg = "Joint limit check failed: " + "; ".join(parts) + "."
+            measurement["score_compat"] = 0.0
+            return MetricResult.make_exclude(
                 name=self.name,
-                measurement={"score_compat": 1.0, "violations": 0, "joints_checked": n_checked},
+                reason="; ".join(parts),
                 message=msg,
                 details=details,
             )
-        else:
-            msg = (
-                f"{total_violations} joint-limit violation(s) across "
-                f"{len(by_joint)} joint(s); worst = "
-                f"{max(by_joint.values())} frames."
-            )
-            # Differentiate severity: small violations (< 5 frames) may be
-            # config/model mismatch rather than physically impossible data
-            if total_violations <= 5:
-                reason = (
-                    f"{total_violations} joint-limit violation(s) — "
-                    f"possible calibration or model mismatch"
+
+        # === REVIEW: approaching boundary or consecutive at boundary ===
+        has_approaching = total_approaching > 0
+        has_consecutive = any(
+            v.get("max_consecutive_at_boundary", 0) >= self.consecutive_frames
+            for v in by_joint.values()
+        )
+        if has_approaching or has_consecutive:
+            parts = []
+            if has_approaching:
+                parts.append(
+                    f"{total_approaching} frame(s) within "
+                    f"{self.approach_threshold * 100:.0f}% of limit boundary"
                 )
-            else:
-                reason = (
-                    f"{total_violations} joint-limit violation(s) — "
-                    f"likely physically impossible values"
+            if has_consecutive:
+                parts.append(
+                    f"{self.consecutive_frames}+ consecutive frames "
+                    f"at boundary"
                 )
+            msg = "Joint limit check: " + "; ".join(parts) + "."
+            measurement["score_compat"] = 0.5
             return MetricResult.make_review(
                 name=self.name,
-                measurement={"score_compat": 0.0, "violations": total_violations, "joints_checked": n_checked},
-                reason=reason,
+                measurement=measurement,
+                reason="; ".join(parts),
                 message=msg,
                 details=details,
-                severity="high",
+                severity="medium",
             )
+
+        # === PASS: all clear ===
+        msg = (
+            f"No joint-limit violations or boundary approaches "
+            f"across {n_checked} joint(s)."
+        )
+        measurement["score_compat"] = 1.0
+        return MetricResult.make_pass(
+            name=self.name,
+            measurement=measurement,
+            message=msg,
+            details=details,
+        )
 
 
 # ---------------------------------------------------------------------------
