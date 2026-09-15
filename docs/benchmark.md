@@ -76,8 +76,8 @@ Loss functions trained on a 75%-idle distribution are structurally biased
 toward predicting "do nothing" unless you weight or curriculum around it.
 
 **2. Same robot, same lab, four-fold idle difference.**
-`xarm_lift_medium`: 20.8% median idle, 767/800 episodes PASS.
-`xarm_push_medium`: 83.3% median idle, 500/800 episodes with spikes.
+`xarm_lift_medium`: 20.8% median idle, all 800 episodes PASS.
+`xarm_push_medium`: 83.3% median idle, 500/800 episodes with action spikes.
 Same xArm platform — the difference is task difficulty, not collection sloppiness.
 
 **3. Action discontinuity tracks the controller, not the dataset's reputation.**
