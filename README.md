@@ -18,7 +18,7 @@ three-tier verdict per episode — **PASS / REVIEW / EXCLUDE** — together with
 measured diagnostics. Use it as an independent check before you accept a
 vendor dataset, train a policy, or publish a benchmark.
 
-**Current release: v0.9.6** — `pip install robot-data-audit`.
+**Current release: v0.9.7** — `pip install robot-data-audit`.
 
 ## ⭐ Support RDA
 
@@ -171,27 +171,30 @@ Tier-3 platform-specific (joint limits, workspace, torque/force/tactile).
 
 ## Validated on real datasets
 
-**12 local datasets, 4,959 episodes, one set of default thresholds, zero
+**13 local datasets, 4,940 episodes, one set of default thresholds, zero
 per-dataset tuning** — full table in [docs/benchmark.md](docs/benchmark.md).
 
-**Four popular LeRobot datasets audited (v0.9.4)** — we ran RDA against
+**Four popular LeRobot datasets audited (v0.9.7)** — we ran RDA against
 `lerobot/pusht`, `aloha_sim_transfer_cube_human`, `xarm_lift_medium` and
 `droid_100` (1,156 episodes across a 2-DOF sim, a 14-DOF bimanual sim, a
-4-DOF arm and a 7-DOF Franka). All episodes pass L1 integrity; the dataset
-profiles differ sharply — median idle frames range from **20.8%** (xArm) to
-**81.7%** (PushT), and the bimanual ALOHA sim shows a median of 30.5
-discontinuity spikes per episode. Every figure is reproducible straight from
-the PyPI package (`pip install robot-data-audit`).
+4-DOF arm and a 7-DOF Franka). All episodes pass L1 integrity under v0.9.7;
+the dataset profiles differ sharply — median idle frames range from **20.8%**
+(xArm) to **81.7%** (PushT), and state space occupancy ranges from 2.4% to
+39%. Under the new verdict pipeline, all four datasets now achieve 100% PASS
+rate. Every figure is reproducible straight from the PyPI package
+(`pip install robot-data-audit==0.9.7`).
 
 **Full audit of lerobot/libero_10 (v3.0)** — 379 episodes, 101,469 frames:
-all applicable integrity checks clean, 0 hard defects.
+all applicable integrity checks clean, **373 PASS / 6 REVIEW / 0 EXCLUDE**
+(6 REVIEW from video_freeze detection only).
 **[Read the report →](docs/benchmark_libero10.md)**
 
-**Blind test** — we injected 50 defective episodes (5 defect classes,
-seed=42) into `lerobot/pusht` and kept 156 as controls. RDA caught all 50
-under the broad criterion, precision **1.000** (zero false alarms on
-controls) under the strict one.
-**[Read the blind-test report →](https://liesliy.github.io/rda/examples/rda_report_pusht.html)**
+**Blind test (v0.9.7)** — we injected 50 defective episodes (5 defect classes,
+seed=42) into `lerobot/pusht` and kept 156 as controls. Precision **1.000**
+(zero false alarms on controls), recall **0.800** strict and broad (40/50
+caught; frozen episodes are a known regression — idle_ratio findings no
+longer auto-escalate to REVIEW verdicts).
+**[Read the blind-test report →](docs/blind_test_20260914.md)**
 
 **Validated on AgiBotWorld2026** — third-party audit of AgiBot's Phase 3
 dataset: all 5 simulation tasks + a real-robot RL package, 1,112 episodes,
