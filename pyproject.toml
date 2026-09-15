@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot-data-audit"
-version = "0.9.6"
+version = "0.9.8"
 description = "Robot Data Audit (RDA) - Quality auditing tool for robot datasets"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -18,21 +18,31 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "numpy>=1.21",
-    "pyarrow>=10.0",
-    "scipy>=1.7",
+    "click>=8.0",
+    "pydantic>=2.0",
+    "numpy>=1.24",
+    "requests>=2.20",
 ]
 
 [project.optional-dependencies]
-video = ["av>=10.0"]
-lerobot = ["lerobot>=0.1"]
-ui = ["streamlit>=1.20"]
-all = ["av>=10.0", "lerobot>=0.1", "streamlit>=1.20"]
+lerobot = ["lerobot>=0.6"]
+video = ["av>=12.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.1"]
+ui = ["streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
+all = ["lerobot>=0.6", "av>=12.0", "streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
 
 [project.scripts]
 rda = "rda.cli.main:cli"
 
+[project.urls]
+Homepage = "https://github.com/liesliy/rda"
+Documentation = "https://github.com/liesliy/rda#readme"
+Issues = "https://github.com/liesliy/rda/issues"
+
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["rda*"]
+exclude = ["server*"]

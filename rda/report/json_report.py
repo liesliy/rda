@@ -105,13 +105,18 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
 
     video_quality_section = {}
     if execution_tier is not None:
+        if video_quality_executed:
+            note = "Visual quality analysis included"
+        elif execution_tier == "no_video":
+            note = "All video metrics skipped. Use --video-quality or --full to enable."
+        elif execution_tier == "video_only":
+            note = "Only video metrics executed. Use default or --full for all metrics."
+        else:
+            note = "Visual quality skipped (Fast Audit). Use --video-quality or --full to enable."
         video_quality_section = {
             "execution_tier": execution_tier,
             "video_quality_executed": video_quality_executed,
-            "video_quality_note": (
-                "Visual quality analysis included" if video_quality_executed
-                else "Visual quality analysis skipped (Fast Audit mode). Use --video-quality or --full to enable."
-            ),
+            "video_quality_note": note,
         }
 
     report = {

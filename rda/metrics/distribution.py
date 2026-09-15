@@ -19,6 +19,64 @@ from rda.metrics.base import MetricBase, MetricResult, MetricAvailability
 # Helper utilities
 # ---------------------------------------------------------------------------
 
+def _resolve_state_array(episode: EpisodeData) -> Optional[np.ndarray]:
+    """Resolve the best state array from observation, supporting both
+    flat and hierarchical LeRobot field naming conventions.
+
+    Resolution order:
+      1. Flat ``"state"`` key  (backward-compatible with standard datasets)
+      2. Hierarchical ``"state.*"`` keys — prefer known comprehensive
+         sub-state names (``robot_q_current``), then the highest-dimension
+         array (most complete joint representation), then first available.
+
+    Args:
+        episode: The episode whose observation dict is inspected.
+
+    Returns:
+        The best matching state ndarray, or ``None``.
+    """
+    obs = episode.observation
+    if not obs:
+        return None
+
+    # 1. Flat "state" key — backward-compatible
+    if "state" in obs:
+        val = obs["state"]
+        if isinstance(val, np.ndarray) and val.ndim >= 2:
+            return val
+
+    # 2. Hierarchical "state.*" keys (LeRobot v3.0+ convention)
+    state_keys = [k for k in obs if k.startswith("state.")]
+    if not state_keys:
+        return None
+
+    # Prefer known comprehensive sub-state names
+    for preferred in ("state.robot_q_current", "state.qpos", "state.joint_pos"):
+        if preferred in obs:
+            val = obs[preferred]
+            if isinstance(val, np.ndarray) and val.ndim >= 2:
+                return val
+
+    # Pick the highest-dimension 2-D array (most complete joint state)
+    best: Optional[np.ndarray] = None
+    best_cols = 0
+    for key in state_keys:
+        val = obs[key]
+        if isinstance(val, np.ndarray) and val.ndim >= 2:
+            cols = val.shape[1] if val.ndim >= 2 else 1
+            if cols > best_cols:
+                best = val
+                best_cols = cols
+    if best is not None:
+        return best
+
+    # Last resort: return first state.* value
+    first = obs[state_keys[0]]
+    if isinstance(first, np.ndarray):
+        return first
+    return None
+
+
 def _feature_stats(values: np.ndarray) -> Dict[str, Any]:
     """Compute column-wise statistical summary of a 2-D feature array.
 
@@ -88,7 +146,7 @@ class DistributionMetric(MetricBase):
         return out
 
     def _trajectory_stats(self, episode: EpisodeData) -> Dict[str, Any]:
-        state = episode.observation.get("state")
+        state = _resolve_state_array(episode)
         result: Dict[str, Any] = {
             "duration_sec": 0.0, "path_length": 0.0,
             "velocity": {"mean": 0.0, "std": 0.0, "p95": 0.0},
@@ -142,7 +200,7 @@ class DistributionMetric(MetricBase):
         }
 
         n_actions = len(action_stats)
-        has_state = episode.observation.get("state") is not None
+        has_state = _resolve_state_array(episode) is not None
         dur = trajectory.get("duration_sec", 0.0)
         plen = trajectory.get("path_length", 0.0)
 
@@ -205,12 +263,12 @@ class CoverageMetric(MetricBase):
             "underrepresented_regions": [],
         }
 
-        state = episode.observation.get("state")
+        state = _resolve_state_array(episode)
         if state is None or not isinstance(state, np.ndarray) or state.ndim < 2:
             return MetricResult.make_na(
                 name=self.name,
                 reason="observation_state_missing",
-                message="observation.state not available; skipping coverage analysis.",
+                message="observation.state (or state.*) not available; skipping coverage analysis.",
                 details=details,
             )
 

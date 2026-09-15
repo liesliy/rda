@@ -167,6 +167,31 @@ def _aggregate_temporal_motion(result: DatasetAuditResult) -> Dict[str, Any]:
             "na_episodes": result.num_episodes,
         }
 
+    # temporal_sufficiency: idle structure and valid window ratios
+    ts_fields = [
+        "idle_total_ratio", "idle_prefix_ratio",
+        "active_run_p50", "active_run_p90", "active_run_max",
+        "transition_count",
+        "valid_window_ratio_5", "valid_window_ratio_10", "valid_window_ratio_20",
+    ]
+    ts_available = 0
+    ts_values: Dict[str, np.ndarray] = {}
+    for field in ts_fields:
+        arr = _collect_measurement_values(result, "temporal_structure", field)
+        ts_values[field] = arr
+        if arr.size > ts_available:
+            ts_available = int(arr.size)
+
+    if ts_available > 0:
+        ts_out: Dict[str, Any] = {"available_episodes": ts_available}
+        for field in ts_fields:
+            arr = ts_values[field]
+            if arr.size > 0:
+                ts_out[field] = _percentile_dict(arr, (5.0, 50.0, 95.0))
+            else:
+                ts_out[field] = {"p5": 0.0, "median": 0.0, "p95": 0.0}
+        out["temporal_structure"] = ts_out
+
     return out
 
 
@@ -210,31 +235,6 @@ def _aggregate_dataset_utility(result: DatasetAuditResult) -> Dict[str, Any]:
             "path_length": _percentile_dict(path_lengths, (5.0, 50.0, 95.0)),
             "available_episodes": int(durations.size),
         }
-
-    # temporal_structure: idle structure and valid window ratios
-    ts_fields = [
-        "idle_total_ratio", "idle_prefix_ratio",
-        "active_run_p50", "active_run_p90", "active_run_max",
-        "transition_count",
-        "valid_window_ratio_5", "valid_window_ratio_10", "valid_window_ratio_20",
-    ]
-    ts_available = 0
-    ts_values: Dict[str, np.ndarray] = {}
-    for field in ts_fields:
-        arr = _collect_measurement_values(result, "temporal_structure", field)
-        ts_values[field] = arr
-        if arr.size > ts_available:
-            ts_available = int(arr.size)
-
-    if ts_available > 0:
-        ts_out: Dict[str, Any] = {"available_episodes": ts_available}
-        for field in ts_fields:
-            arr = ts_values[field]
-            if arr.size > 0:
-                ts_out[field] = _percentile_dict(arr, (5.0, 50.0, 95.0))
-            else:
-                ts_out[field] = {"p5": 0.0, "median": 0.0, "p95": 0.0}
-        out["temporal_structure"] = ts_out
 
     return out
 

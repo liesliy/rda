@@ -146,6 +146,21 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     lines.append("=" * 60)
     lines.append(f"  Dataset: {dataset_path}")
     lines.append(f"  Episodes: {total} | Frames: {total_frames:,}")
+
+    # D-17 (v0.9.4): show execution tier
+    execution_tier = getattr(result, "execution_tier", None)
+    tier_labels = {
+        "fast": "Fast Audit",
+        "video_quality": "Video Quality Audit",
+        "no_video": "No Video",
+        "video_only": "Video Only",
+        "full": "Full Audit",
+    }
+    tier_label = tier_labels.get(execution_tier, "Fast Audit") if execution_tier else "Fast Audit"
+    video_quality_executed = getattr(result, "video_quality_executed", False)
+    lines.append(f"  Execution Tier: {tier_label}")
+    if not video_quality_executed:
+        lines.append("    (visual quality skipped — use --video-quality or --full to enable)")
     lines.append("")
 
     # --- Verdict ---

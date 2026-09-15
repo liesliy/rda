@@ -18,12 +18,71 @@ from rda.metrics.base import MetricBase, MetricResult, MetricAvailability
 # Helper utilities
 # ---------------------------------------------------------------------------
 
+def _resolve_state_array(episode: EpisodeData) -> Optional[np.ndarray]:
+    """Resolve the best state array from observation, supporting both
+    flat and hierarchical LeRobot field naming conventions.
+
+    Resolution order:
+      1. Flat ``"state"`` key  (backward-compatible with standard datasets)
+      2. Hierarchical ``"state.*"`` keys — prefer known comprehensive
+         sub-state names (``robot_q_current``), then the highest-dimension
+         array (most complete joint representation), then first available.
+
+    Args:
+        episode: The episode whose observation dict is inspected.
+
+    Returns:
+        The best matching state ndarray, or ``None``.
+    """
+    obs = episode.observation
+    if not obs:
+        return None
+
+    # 1. Flat "state" key — backward-compatible
+    if "state" in obs:
+        val = obs["state"]
+        if isinstance(val, np.ndarray) and val.ndim >= 2:
+            return val
+
+    # 2. Hierarchical "state.*" keys (LeRobot v3.0+ convention)
+    state_keys = [k for k in obs if k.startswith("state.")]
+    if not state_keys:
+        return None
+
+    # Prefer known comprehensive sub-state names
+    for preferred in ("state.robot_q_current", "state.qpos", "state.joint_pos"):
+        if preferred in obs:
+            val = obs[preferred]
+            if isinstance(val, np.ndarray) and val.ndim >= 2:
+                return val
+
+    # Pick the highest-dimension 2-D array (most complete joint state)
+    best: Optional[np.ndarray] = None
+    best_cols = 0
+    for key in state_keys:
+        val = obs[key]
+        if isinstance(val, np.ndarray) and val.ndim >= 2:
+            cols = val.shape[1] if val.ndim >= 2 else 1
+            if cols > best_cols:
+                best = val
+                best_cols = cols
+    if best is not None:
+        return best
+
+    # Last resort: return first state.* value
+    first = obs[state_keys[0]]
+    if isinstance(first, np.ndarray):
+        return first
+    return None
+
+
 def _primary_action_array(episode: EpisodeData) -> Optional[np.ndarray]:
     """Find the primary action array from an episode.
 
     Looks for well-known action keys (``joint_pos``, ``position``,
-    ``action``) first, then falls back to the first 2-D floating-point
-    action array, then to any action array at all.
+    ``action``) first, then falls back to the highest-dimensional 2-D
+    floating-point action array (most complete control signal), then
+    to any action array at all.
 
     Args:
         episode: The episode to search for an action array in.
@@ -38,13 +97,29 @@ def _primary_action_array(episode: EpisodeData) -> Optional[np.ndarray]:
             arr = episode.action[preferred]
             if isinstance(arr, np.ndarray) and arr.ndim >= 1:
                 return arr
+    # Fallback: pick the highest-dimension 2-D float array.
+    # For multi-action datasets (e.g. G1_WBT with ee_action, hand_cmd,
+    # robot_q_desired), this selects the most complete control signal.
+    best_arr: Optional[np.ndarray] = None
+    best_cols = 0
+    for arr in episode.action.values():
+        if not isinstance(arr, np.ndarray):
+            continue
+        if arr.ndim >= 2 and np.issubdtype(arr.dtype, np.floating):
+            cols = arr.shape[1] if arr.ndim >= 2 else 1
+            if cols > best_cols:
+                best_arr = arr
+                best_cols = cols
+    if best_arr is not None:
+        return best_arr
+    # Last resort: any action array
     first_arr: Optional[np.ndarray] = None
     for arr in episode.action.values():
         if not isinstance(arr, np.ndarray):
             continue
         if first_arr is None:
             first_arr = arr
-        if arr.ndim >= 2 and np.issubdtype(arr.dtype, np.floating):
+        if arr.ndim >= 2:
             return arr
     return first_arr
 
@@ -179,12 +254,12 @@ class JointLimitMetric(MetricBase):
                 details=details,
             )
 
-        state_arr = episode.observation.get("state")
+        state_arr = _resolve_state_array(episode)
         if state_arr is None:
             return MetricResult.make_na(
                 name=self.name,
                 reason="observation_state_missing",
-                message="observation.state not available; skipping check.",
+                message="observation.state (or state.*) not available; skipping check.",
                 details=details,
             )
 
@@ -694,7 +769,7 @@ class VelocityMetric(MetricBase):
     description = "Compute velocity / acceleration statistics and detect extreme spikes."
 
     def compute(self, episode: EpisodeData) -> MetricResult:
-        state = episode.observation.get("state")
+        state = _resolve_state_array(episode)
         details: Dict[str, Any] = {
             "velocity_stats": {},
             "acceleration_stats": {},
@@ -705,7 +780,7 @@ class VelocityMetric(MetricBase):
             return MetricResult.make_na(
                 name=self.name,
                 reason="observation_state_missing",
-                message="observation.state not available; skipping.",
+                message="observation.state (or state.*) not available; skipping.",
                 details=details,
             )
 
