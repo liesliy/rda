@@ -30,7 +30,7 @@ zero tuning.
 | `empty` | all rows deleted from data parquet; `meta/episodes` left stale (length > 0) | EXCLUDE (regression probe: the v0.4.12 zero-frame silent-PASS bug) |
 | `nan_state` | 15 random frames per episode, `observation.state` set to NaN (both dims, 300 cells) | EXCLUDE via `invalid_values` |
 | `timestamp_reverse` | second half of the episode's timestamps reversed → 692 negative deltas total | EXCLUDE via `timestamp_validity` |
-| `frozen` | entire episode `observation.state` + `action` frozen at first-frame values | REVIEW via `idle_ratio` (effective motion 0%) |
+| `frozen` | entire episode `observation.state` + `action` frozen at first-frame values | finding only (idle_ratio detects RISK_SIGNAL, but v0.9.7 does not escalate to REVIEW) |
 | `duplicate_frames` | 5 random frames per episode duplicated once, copies appended at episode end → 2–4 negative deltas per episode | honest probe; detected via `timestamp_validity` only because duplicates land at the episode tail |
 
 4. Ran `rda audit` (0.9.7, defaults, --no-video) and compared every verdict
