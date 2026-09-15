@@ -43,15 +43,12 @@ looks unusual", so observational signals never masquerade as fatal defects.
 
 | Layer | Role | # Metrics | Can set verdict? |
 |---|---|---|---|
-| **L1 — Integrity Gate** | Deterministic hard checks (missing / NaN / limit / video-stream) | 9 | ✅ PASS → EXCLUDE |
+| **L1 — Integrity Gate** | Deterministic hard checks (missing / NaN / limit / video-stream) | 9 | ✅ PASS → REVIEW / EXCLUDE |
 | **L2 — Trajectory Diagnostics** | Observational motion & video anomalies | 8 | ❌ findings only |
 | **L3 — Dataset Profile** | Training-data efficiency & coverage | 4 | ❌ findings only |
 | **L4 — Dataset Summary** | Dataset-level P10/P50/P90 aggregation | — | 📊 report only |
 
-An episode is **EXCLUDE** only if an L1 hard check fails; **REVIEW/PASS** are
-driven by L1 state, while L2/L3 surface measurements and findings for the
-human reviewer. RDA measures and presents — the accept/reject decision stays
-with you.
+An episode is **EXCLUDE** only if a critical L1 check fails (e.g. missing data, NaN, timestamp errors). Some L1 checks like `video_freeze` may also flag **REVIEW** when the issue is advisory rather than fatal. **L2/L3** surface observational measurements and findings for the human reviewer. RDA measures and presents — the accept/reject decision stays with you.
 
 ## Install
 
