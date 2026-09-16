@@ -5,7 +5,7 @@ level — frame completeness, value validity, and structural consistency.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -232,9 +232,11 @@ class SchemaShapeMetric(MetricBase):
             "num_frames": episode.num_frames,
             "features": {},
             "length_mismatches": [],
+            "dimension_mismatches": [],
         }
 
         length_mismatches: List[str] = []
+        dimension_mismatches: List[Dict[str, Any]] = []
         features_info: Dict[str, Dict[str, Any]] = {}
 
         all_features: Dict[str, np.ndarray] = {}
@@ -256,13 +258,45 @@ class SchemaShapeMetric(MetricBase):
             if arr.shape[0] != episode.num_frames:
                 length_mismatches.append(key)
 
+        # --- Dimension cross-validation against info.json declared shapes ---
+        declared_features = episode.meta.get("declared_features")
+        if declared_features and isinstance(declared_features, dict):
+            for feature_name, feature_info in declared_features.items():
+                if not isinstance(feature_info, dict):
+                    continue
+                expected_shape = feature_info.get("shape")
+                if not expected_shape or not isinstance(expected_shape, list):
+                    continue
+                # expected_shape[0] is the time dim (matches num_frames),
+                # expected_shape[1:] are the per-frame dimensions.
+                expected_per_frame = expected_shape[1:] if len(expected_shape) > 1 else []
+                if not expected_per_frame:
+                    continue
+                actual_arr = all_features.get(feature_name)
+                if actual_arr is None or len(actual_arr) == 0:
+                    continue
+                actual_per_frame = _feature_shape_signature(actual_arr)
+                if actual_per_frame and tuple(expected_per_frame) != actual_per_frame:
+                    dimension_mismatches.append({
+                        "feature": feature_name,
+                        "expected_shape": expected_shape,
+                        "actual_shape": [int(actual_arr.shape[0])] + list(actual_per_frame),
+                        "type": "shape_mismatch",
+                    })
+
         details["features"] = features_info
         details["length_mismatches"] = length_mismatches
+        details["dimension_mismatches"] = dimension_mismatches
 
-        passed = len(length_mismatches) == 0
+        total_issues = len(length_mismatches) + len(dimension_mismatches)
+        passed = total_issues == 0
 
         if passed:
-            msg = f"All {len(all_features)} features have consistent shape within the episode."
+            parts = [f"All {len(all_features)} features have consistent shape"]
+            if declared_features:
+                parts.append(f"and match {len(declared_features)} declared feature(s)")
+            parts.append("within the episode.")
+            msg = " ".join(parts)
             return MetricResult.make_pass(
                 name=self.name,
                 measurement={"score_compat": 1.0, "mismatch_count": 0},
@@ -270,10 +304,22 @@ class SchemaShapeMetric(MetricBase):
                 details=details,
             )
         else:
-            msg = f"{len(length_mismatches)} feature(s) have first-dimension length mismatch: {', '.join(length_mismatches)}."
+            issue_parts = []
+            if length_mismatches:
+                issue_parts.append(
+                    f"{len(length_mismatches)} feature(s) with frame-count mismatch: "
+                    + ", ".join(length_mismatches)
+                )
+            if dimension_mismatches:
+                feature_names = [m["feature"] for m in dimension_mismatches]
+                issue_parts.append(
+                    f"{len(dimension_mismatches)} feature(s) with dimension mismatch: "
+                    + ", ".join(feature_names)
+                )
+            msg = "; ".join(issue_parts) + "."
             return MetricResult.make_exclude(
                 name=self.name,
-                reason=f"{len(length_mismatches)} schema mismatches",
+                reason=f"{total_issues} schema issue(s)",
                 message=msg,
                 details=details,
             )

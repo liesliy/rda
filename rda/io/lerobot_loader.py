@@ -103,6 +103,75 @@ def _load_info_json(dataset_path: Path) -> dict:
         return json.load(f)
 
 
+def _extract_joint_limits_from_info(info: dict) -> Optional[list]:
+    """Extract joint_limits from info.json and normalize to [(low, high), ...] format.
+
+    Supports two info.json formats:
+    - Dict format: ``{"low": [...], "high": [...]}``
+    - List format: ``[[low, high], ...]``
+
+    Returns:
+        Normalized list of (low, high) tuples, or None if not present/invalid.
+    """
+    raw = info.get("joint_limits")
+    if raw is None:
+        return None
+    if isinstance(raw, dict) and "low" in raw and "high" in raw:
+        try:
+            lows = raw["low"]
+            highs = raw["high"]
+            if len(lows) == len(highs):
+                return list(zip(lows, highs))
+        except (TypeError, ValueError):
+            pass
+        return None
+    if isinstance(raw, (list, tuple)) and len(raw) > 0:
+        if isinstance(raw[0], (list, tuple)) and len(raw[0]) == 2:
+            return [tuple(pair) for pair in raw]
+        if isinstance(raw[0], dict) and "low" in raw[0] and "high" in raw[0]:
+            return [(item["low"], item["high"]) for item in raw]
+    return None
+
+
+def _extract_declared_features_from_info(info: dict) -> Optional[dict]:
+    """Extract the features declaration from info.json for schema validation.
+
+    Returns:
+        Dict mapping feature name to its declaration (including 'shape'),
+        or None if no features with shape declarations are found.
+    """
+    features = info.get("features")
+    if not features or not isinstance(features, dict):
+        return None
+    declared = {}
+    for key, val in features.items():
+        if isinstance(val, dict) and "shape" in val:
+            declared[key] = val
+    return declared if declared else None
+
+
+def _enrich_episode_from_info(episode: EpisodeData, dataset_path: Path) -> None:
+    """Inject joint_limits and declared_features from info.json into episode.meta.
+
+    Modifies the episode's meta dict in-place. Silently skips if info.json
+    is missing or cannot be parsed (backward-compatible).
+
+    Args:
+        episode: The EpisodeData to enrich.
+        dataset_path: Root path of the LeRobot dataset.
+    """
+    try:
+        info = _load_info_json(dataset_path)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return
+    joint_limits = _extract_joint_limits_from_info(info)
+    if joint_limits is not None:
+        episode.meta["joint_limits"] = joint_limits
+    declared_features = _extract_declared_features_from_info(info)
+    if declared_features is not None:
+        episode.meta["declared_features"] = declared_features
+
+
 def _get_feature_keys(info: dict) -> tuple:
     """Extract modality and action keys from info.json features dict."""
     features = info.get("features", {})
@@ -476,6 +545,8 @@ def _read_episode_parquet_v30(
 
     episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, "v3.0")
     episode.meta["dataset_root"] = str(dataset_path)
+    # Enrich with joint_limits and declared_features from info.json
+    _enrich_episode_from_info(episode, dataset_path)
 
     # Resolve the human-readable task description for this episode's
     # task_index (if the dataset declares task identity).
@@ -653,7 +724,10 @@ def _read_episode_parquet_v21(
     else:
         ep_df = df.reset_index(drop=True)
 
-    return _extract_episode_from_dataframe(ep_df, ep_index, fps, "v2.1")
+    episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, "v2.1")
+    # Enrich with joint_limits and declared_features from info.json
+    _enrich_episode_from_info(episode, dataset_path)
+    return episode
 
 
 # ---------------------------------------------------------------------------
@@ -969,6 +1043,12 @@ def iter_episodes(
     hf_ds = dataset.hf_dataset
     ep_indices = sorted(hf_ds.unique("episode_index"))
 
+    # Load info.json for joint_limits and declared_features (if available)
+    try:
+        info = _load_info_json(dataset_path)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        info = {}
+
     count = 0
     for ep_idx in ep_indices:
         if max_episodes is not None and count >= max_episodes:
@@ -1021,6 +1101,15 @@ def iter_episodes(
                 d = d.squeeze(-1)
             done = d
 
+        ep_meta = {"source": "lerobot"}
+        # Enrich with joint_limits and declared_features from info.json
+        jl = _extract_joint_limits_from_info(info)
+        if jl is not None:
+            ep_meta["joint_limits"] = jl
+        df_feats = _extract_declared_features_from_info(info)
+        if df_feats is not None:
+            ep_meta["declared_features"] = df_feats
+
         yield EpisodeData(
             episode_index=ep_idx,
             num_frames=num_frames,
@@ -1029,6 +1118,6 @@ def iter_episodes(
             action=action,
             reward=reward,
             done=done,
-            meta={"source": "lerobot"},
+            meta=ep_meta,
         )
         count += 1

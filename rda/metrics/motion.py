@@ -209,6 +209,30 @@ class JointLimitMetric(MetricBase):
     # ----- helpers --------------------------------------------------------
 
     @staticmethod
+    def _normalize_joint_limits(limits):
+        """Convert various joint_limits formats to [(low, high), ...].
+
+        Supported input formats:
+        - Dict: ``{"low": [...], "high": [...]}`` (info.json format A)
+        - List of pairs: ``[(low, high), ...]`` (already canonical)
+        - List of dicts: ``[{"low": l, "high": h}, ...]``
+
+        Returns:
+            List of (low, high) tuples, or None if the format is unrecognized.
+        """
+        if isinstance(limits, dict) and "low" in limits and "high" in limits:
+            try:
+                return list(zip(limits["low"], limits["high"]))
+            except (TypeError, ValueError):
+                return None
+        elif isinstance(limits, (list, tuple)) and len(limits) > 0:
+            if isinstance(limits[0], (list, tuple)) and len(limits[0]) == 2:
+                return [tuple(pair) for pair in limits]
+            elif isinstance(limits[0], dict) and "low" in limits[0] and "high" in limits[0]:
+                return [(item["low"], item["high"]) for item in limits]
+        return None
+
+    @staticmethod
     def _max_consecutive_run(mask: np.ndarray) -> int:
         """Return length of the longest True-run in a boolean array."""
         if mask.size == 0:
@@ -251,6 +275,16 @@ class JointLimitMetric(MetricBase):
                 name=self.name,
                 reason="joint_limits_not_provided",
                 message="Joint limits not provided; skipping check.",
+                details=details,
+            )
+
+        # Normalize joint_limits to [(low, high), ...] format
+        limits = self._normalize_joint_limits(limits)
+        if limits is None:
+            return MetricResult.make_na(
+                name=self.name,
+                reason="joint_limits_unrecognized_format",
+                message="Joint limits format not recognized; skipping check.",
                 details=details,
             )
 
