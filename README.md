@@ -3,238 +3,142 @@
 [![PyPI](https://img.shields.io/pypi/v/robot-data-audit)](https://pypi.org/project/robot-data-audit/)
 [![Python](https://img.shields.io/pypi/pyversions/robot-data-audit)](https://pypi.org/project/robot-data-audit/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Downloads](https://static.pepy.tech/badge/robot-data-audit)](https://pepy.tech/project/robot-data-audit)
-[![Downloads/month](https://static.pepy.tech/badge/robot-data-audit/month)](https://pepy.tech/project/robot-data-audit)
-[![Tests](https://github.com/liesliy/rda/actions/workflows/ci.yml/badge.svg)](https://github.com/liesliy/rda/actions/workflows/ci.yml)
 
-[![audit: lerobot/pusht](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_pusht.svg)](https://liesliy.github.io/rda/examples/rda_report_pusht.html) [![audit: AgiBotWorld2026 RL](https://raw.githubusercontent.com/liesliy/rda/main/docs/examples/rda_badge_agibot_rl.svg)](https://liesliy.github.io/rda/examples/rda_report_agibot_rl_hgdagger.html)
+**Audit robot dataset quality. Local only.**
 
-> **Independent quality assessment for robot data.** Runs locally — your data never leaves your machine.
->
-> RDA is a diagnostic tool. It does not guarantee training success-rate improvements.
+RDA checks LeRobot-format datasets for data integrity, temporal consistency, and motion anomalies. It flags problematic episodes and reports what's wrong. RDA is a **diagnostic tool only** — it does not guarantee training success rate improvements.
 
-RDA audits robot manipulation datasets (LeRobot format) and reports a
-three-tier verdict per episode — **PASS / REVIEW / EXCLUDE** — together with
-measured diagnostics. Use it as an independent check before you accept a
-vendor dataset, train a policy, or publish a benchmark.
+---
 
-**Current release: v0.9.7** — `pip install robot-data-audit`.
-
-## ⭐ Support RDA
-
-If RDA helps you ship better robot data, **star the repo** — it takes one click
-and is the single best way to help us grow.
-
-<a href="https://github.com/liesliy/rda" target="_blank">
-  <img src="https://img.shields.io/github/stars/liesliy/rda?style=social" alt="Star RDA on GitHub">
-</a>
-
-Every star tells us we're on the right track. Bug reports, feature requests and
-real-world feedback are even better — see the
-[feedback form](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
-or run `rda feedback` to submit one.
-
-## The four-layer audit
-
-RDA runs every episode through four sequential layers. The key design rule:
-**only hard integrity checks can flip an episode to EXCLUDE; diagnostic
-measurements never do.** This separates "this data is broken" from "this data
-looks unusual", so observational signals never masquerade as fatal defects.
-
-| Layer | Role | # Metrics | Can set verdict? |
-|---|---|---|---|
-| **L1 — Integrity Gate** | Deterministic hard checks (missing / NaN / limit / video-stream) | 9 | ✅ PASS → REVIEW / EXCLUDE |
-| **L2 — Trajectory Diagnostics** | Observational motion & video anomalies | 8 | ❌ findings only |
-| **L3 — Dataset Profile** | Training-data efficiency & coverage | 4 | ❌ findings only |
-| **L4 — Dataset Summary** | Dataset-level P10/P50/P90 aggregation | — | 📊 report only |
-
-An episode is **EXCLUDE** only if a critical L1 check fails (e.g. missing data, NaN, timestamp errors). Some L1 checks like `video_freeze` may also flag **REVIEW** when the issue is advisory rather than fatal. **L2/L3** surface observational measurements and findings for the human reviewer. RDA measures and presents — the accept/reject decision stays with you.
-
-## Install
+## Quick Start
 
 ```bash
-pip install robot-data-audit
+pip install robot-data-audit           # install
+rda audit /path/to/dataset             # audit → text + JSON report in <dataset>/rda_report.json
 ```
 
-Optional dependency tiers:
+---
 
-| Tier | Extra | Unlocks |
-|---|---|---|
-| Core (default) | — | parquet audits: integrity + temporal/motion + dataset-utility metrics |
-| Visual | `pip install robot-data-audit[video]` or `pip install av` | the video visual metrics (freeze / timestamp-alignment / stream-span/offset/drift / quality) |
-| Lerobot | `[lerobot]` | `.parquet` dataset loading via the lerobot package |
-| UI | `[ui]` | the web dashboard |
-| Everything | `[all]` | all of the above |
+## Sample Output
 
-**Visual metrics without PyAV are reported as "not audited", never as
-"pass"**: the JSON report carries a top-level `skipped_by_missing_dep` field
-and the CLI prints a warning listing the skipped checks. The web dashboard
-shows the same guarantee — a dep-missing dataset renders a "not audited ≠
-pass" banner.
+```
+$ rda audit ~/datasets/my_robot_data
 
-## Quick start
+  ── Verdict ──
+  PASS:    180 (90.0%)
+  REVIEW:   15 ( 7.5%)
+  EXCLUDE:   5 ( 2.5%)
+
+  ── Top Issues ──
+  1. [HIGH ★] Action discontinuity: 3421 spikes across 195 episodes
+  2. [MEDIUM] High idle ratio: median 72% idle, 28% effective motion
+  3. [LOW] Extreme acceleration spikes: 2847 across 180 episodes
+```
+
+Output options: `--format json` for scripting, `-o FILE` to save elsewhere.
+
+---
+
+## Real Audit Results
+
+Audited on [ArmnetBench](https://huggingface.co/datasets/armnet/armnetbench_v01_lerobot_so101) (SO-101 arm, 2,499 episodes) and [DROID](https://droid-dataset.github.io/) (100 episodes):
+
+| Metric | ArmnetBench (200 ep subset) | DROID (100 ep) |
+|--------|---------------------------|----------------|
+| Action spikes detected | 5,229 | 1,428 |
+| Median idle ratio | 68.6% | 70.7% |
+| Median episode duration | 22.4s | 15.0s |
+| Verdict | All PASS | All PASS |
+
+Both are curated benchmark datasets — all episodes pass. RDA also runs on noisier, real-world collections where REVIEW/EXCLUDE verdicts appear more frequently.
+
+Full calibration analysis (ArmnetBench, comparing successful vs failure episodes by label): [`docs/ARMNETBENCH_CALIBRATION_REPORT.md`](docs/ARMNETBENCH_CALIBRATION_REPORT.md)
+
+---
+
+## Design
+
+- **Local only** — No data leaves your machine. Runs entirely offline.
+- **Diagnostic, not predictive** — RDA identifies data issues. Whether fixing them improves training is a separate question and depends on your task, model, and setup.
+- **Statistical anomaly detection** — Uses MAD on reference distributions instead of fixed thresholds (no hardcoded 3σ rules). Adapts to each dataset's characteristics.
+- **Universal core metrics** — Primary ranking uses 3 platform-independent metrics (duration, spike_count, effective_motion_ratio). Platform-specific signals (velocity, path_length) are optional diagnostics.
+
+See [`docs/MVP_PRODUCT_SPEC.md`](docs/MVP_PRODUCT_SPEC.md) for full metric definitions.
+
+---
+
+## Metrics
+
+| Tier | Metric | Detects | Cross-platform? |
+|------|--------|---------|:---:|
+| L1 | Timestamp monotonicity | Clock resets, duplicates | ✅ |
+| L1 | Frame interval consistency | Irregular sampling | ✅ |
+| L1 | Schema compliance | Missing/extra fields | ✅ |
+| L2 | Temporal gap detection | Time discontinuities | ✅ |
+| L2 | Sensor synchronization | Multi-sensor drift | ⚠️ |
+| L2 | Temporal sufficiency | Idle vs active structure | ✅ |
+| L3 | Velocity spikes | Implausible jumps | ️ |
+| L3 | Motion discontinuities | Jerky trajectories | ⚠️ |
+| L3 | Idle frame detection | Paused segments | ✅ |
+| L4 | Duration outliers | Too short / too long | ✅ |
+| L4 | Spike count outliers | Unusual jerk profiles | ✅ |
+| L4 | Effective motion ratio | Low-activity episodes | ✅ |
+
+---
+
+## CLI Reference
+
+### `rda audit`
 
 ```bash
-# 1. Audit a dataset — 21 metrics across four layers, three-tier verdicts
-#    Default: Fast Audit (all metrics except visual_quality)
-rda audit /path/to/lerobot/dataset
-
-# 2. Include visual quality analysis
-rda audit /path/to/lerobot/dataset --video-quality
-
-# 3. Recommendations calibrated to your model type
-rda recommend /path/to/dataset --policy temporal   # or frame-wise
-
-# 4. Optional web dashboard
-rda ui
+rda audit /path/to/dataset [OPTIONS]
 ```
 
-`rda audit` is fully offline and emits a structured JSON report: per-episode
-verdicts, every metric's measurement/findings, plus a dataset-level
-`acceptance_summary` (P10/P50/P90 baselines, runtime outliers, and the
-not-checked inventory). `rda recommend` computes all metrics locally and
-sends only aggregated statistics (<1 KB) to the rules API — cached for
-offline reuse, and `RDA_API_URL` can point to your own server for private
-deployments.
+| Option | Description |
+|--------|-------------|
+| `-o, --output FILE` | Save JSON report (default: `<path>/rda_report.json`) |
+| `--format [json\|text]` | Output format (default: `text`) |
+| `--platform TEXT` | Robot platform name for Tier 3 normalization |
+| `-v, --verbose` | Verbose output |
 
-### Execution tiers
+Exit codes: `0` = no EXCLUDE, `1` = error, `2` = at least one EXCLUDE.
 
-Visual quality analysis (`visual_quality`) involves frame decoding and is
-significantly slower than other metrics. RDA v0.9.4 introduces **tiered
-execution** so you can control which metrics run:
+---
 
-| Mode | Flag | What runs |
-|---|---|---|
-| **Fast Audit** | *(default)* | All 21 metrics **except** `visual_quality` |
-| **Video Quality** | `--video-quality` | All 21 metrics, including `visual_quality` |
-| **No Video** | `--no-video` | All metrics except video-related (9 video metrics skipped) |
-| **Video Only** | `--video-only` | Only the 9 video-related metrics |
-| **Full Audit** | `--full` | All 21 metrics, including `visual_quality` |
-
-Flags are mutually exclusive. The JSON report (schema v1.2) includes an
-`execution_tier` field and a `video_quality` block indicating whether
-visual quality was executed and why. The text report header shows the
-active tier and whether visual quality was skipped.
-
-### Programmatic use
+## Python API
 
 ```python
-import numpy as np
-from rda.io.schema import EpisodeData
-from rda.audit.episode_audit import EpisodeAuditor
+from rda.audit.dataset_audit import DatasetAuditor
+from rda.io.lerobot_loader import iter_episodes, load_lerobot_dataset
 
-episode = EpisodeData(
-    episode_index=0,
-    num_frames=n_frames,
-    timestamps=np.array(timestamps),          # seconds
-    observation={"state": state_array},      # shape (T, DoF)
-    action={"joint_pos": action_array},      # shape (T, DoF)
-    meta={"fps": 10, "source": "my/dataset"},
-)
-result = EpisodeAuditor().audit(episode)
-print(result.verdict)                        # PASS / REVIEW / EXCLUDE
-for name, metric in result.metrics.items():
-    if metric.has_finding:
-        print(name, metric.measurement)
+dataset_info = load_lerobot_dataset("/path/to/dataset")
+auditor = DatasetAuditor()
+result = auditor.audit_dataset(dataset_info, iter_episodes("/path/to/dataset"))
+print(f"PASS: {result.verdict_counts['PASS']}")
 ```
 
-## The 21 metrics
+---
 
-**L1 — Integrity Gate (hard checks, can EXCLUDE)**
-`missing_dropout` · `invalid_values` (NaN/Inf) · `schema_consistency` ·
-`temporal_validity` · `joint_limit` (three-level PASS/REVIEW/EXCLUDE with
-configurable `approach_threshold` / `consecutive_frames` / `jump_multiplier`)
-· `video_frame_integrity` · `video_freeze` · `video_timestamp_alignment` ·
-`video_stream_presence`
-
-**L2 — Trajectory Diagnostics (observational, never EXCLUDE)**
-`sensor_sync` · `sampling_jitter` · `velocity_acceleration` ·
-`action_discontinuity` (MAD-based spike detection) · `visual_quality` ⚡ ·
-`video_stream_span_consistency` · `video_stream_temporal_offset` ·
-`video_stream_temporal_drift`
-
-> ⚡ `visual_quality` requires frame decoding and is **skipped by default**
-> (Fast Audit). Enable with `--video-quality` or `--full`.
-
-**L3 — Dataset Profile (efficiency & coverage)**
-`idle_ratio` (three-tier fallback: 30-bin valley → 3×MAD → 1e-6 floor) ·
-`distribution` · `coverage` · `temporal_structure`
-
-Metrics are also classified by **cross-platform portability** (MVP Spec
-v0.2.0 §1.5): Tier-1 universal (`duration_sec`, `spike_count`,
-`effective_motion_ratio` — comparable across any robot), Tier-2 normalizable
-(velocity / acceleration / jerk / path-length — need platform scaling),
-Tier-3 platform-specific (joint limits, workspace, torque/force/tactile).
-
-## Validated on real datasets
-
-**13 local datasets, 4,940 episodes, one set of default thresholds, zero
-per-dataset tuning** — full table in [docs/benchmark.md](docs/benchmark.md).
-
-**Four popular LeRobot datasets audited (v0.9.7)** — we ran RDA against
-`lerobot/pusht`, `aloha_sim_transfer_cube_human`, `xarm_lift_medium` and
-`droid_100` (1,156 episodes across a 2-DOF sim, a 14-DOF bimanual sim, a
-4-DOF arm and a 7-DOF Franka). All episodes pass L1 integrity under v0.9.7;
-the dataset profiles differ sharply — median idle frames range from **20.8%**
-(xArm) to **81.7%** (PushT), and state space occupancy ranges from 2.4% to
-39%. Under the new verdict pipeline, all four datasets now achieve 100% PASS
-rate. Every figure is reproducible straight from the PyPI package
-(`pip install robot-data-audit==0.9.7`).
-
-**Full audit of lerobot/libero_10 (v3.0)** — 379 episodes, 101,469 frames:
-all applicable integrity checks clean, **373 PASS / 6 REVIEW / 0 EXCLUDE**
-(6 REVIEW from video_freeze detection only).
-**[Read the report →](docs/benchmark_libero10.md)**
-
-**Blind test (v0.9.7)** — we injected 50 defective episodes (5 defect classes,
-seed=42) into `lerobot/pusht` and kept 156 as controls. Precision **1.000**
-(zero false alarms on controls), recall **0.800** strict and broad (40/50
-caught; frozen episodes are a known regression — idle_ratio findings no
-longer auto-escalate to REVIEW verdicts).
-**[Read the blind-test report →](docs/blind_test_20260914.md)**
-
-**Validated on AgiBotWorld2026** — third-party audit of AgiBot's Phase 3
-dataset: all 5 simulation tasks + a real-robot RL package, 1,112 episodes,
-4,448 integrity checks with 0 failures, and a **3.1× enrichment** of RDA's
-discontinuity spikes at official human-takeover boundaries. Zero adaptation
-needed. **[Read the case study →](docs/examples/agibotworld2026.md)**
-
-Every audit can also render into a shareable single-file HTML report and a
-README badge:
+## Development
 
 ```bash
-python tools/rda_render.py rda_report.json --html report.html --badge badge.svg
+git clone https://github.com/liesliy/rda.git
+cd rda
+pip install -e ".[dev]"
+pytest
 ```
-
-More: [CLI reference & metrics table](docs/cli.md) · [experiments](experiments/) · [real-world feedback form](https://github.com/liesliy/rda/issues/new?template=real-world-feedback.yml)
-
-## Governance
-
-RDA's metric I/O is pinned by a core-parameter spec, and every change is
-guarded by semantic-invariant tests run in CI. Seven invariant guard tests
-(INV-003 … INV-009) protect the core architecture — e.g. "L2 diagnostics
-never set an EXCLUDE verdict", "no inference is reported as a measurement",
-"the report always carries a tool version". The full suite runs on every
-push across Python 3.10–3.12.
-
-## Metric provenance
-
-Every metric ships with a four-file provenance record
-(`docs/provenance/<metric>/`): **algorithm.md** (how it works),
-**source.md** (public precedents consulted — ideas only),
-**implementation_origin.md** (original implementation, zero third-party
-code), **license.md** (compliance notes). Index:
-[docs/provenance/](docs/provenance/).
 
 ## Citation
 
 ```bibtex
 @software{robot_data_audit,
-  title = {Robot Data Audit: Quality Auditing for Robot Manipulation Datasets},
-  author = {Niu Su Tech},
-  year = {2026},
-  url = {https://github.com/liesliy/rda}
+  title     = {Robot Data Audit: Quality Auditing for Robot Manipulation Datasets},
+  author    = {Niu Su Tech},
+  year      = {2026},
+  url       = {https://github.com/liesliy/rda}
 }
 ```
 
-MIT License.
+## License
+
+MIT
