@@ -209,30 +209,6 @@ class JointLimitMetric(MetricBase):
     # ----- helpers --------------------------------------------------------
 
     @staticmethod
-    def _normalize_joint_limits(limits):
-        """Convert various joint_limits formats to [(low, high), ...].
-
-        Supported input formats:
-        - Dict: ``{"low": [...], "high": [...]}`` (info.json format A)
-        - List of pairs: ``[(low, high), ...]`` (already canonical)
-        - List of dicts: ``[{"low": l, "high": h}, ...]``
-
-        Returns:
-            List of (low, high) tuples, or None if the format is unrecognized.
-        """
-        if isinstance(limits, dict) and "low" in limits and "high" in limits:
-            try:
-                return list(zip(limits["low"], limits["high"]))
-            except (TypeError, ValueError):
-                return None
-        elif isinstance(limits, (list, tuple)) and len(limits) > 0:
-            if isinstance(limits[0], (list, tuple)) and len(limits[0]) == 2:
-                return [tuple(pair) for pair in limits]
-            elif isinstance(limits[0], dict) and "low" in limits[0] and "high" in limits[0]:
-                return [(item["low"], item["high"]) for item in limits]
-        return None
-
-    @staticmethod
     def _max_consecutive_run(mask: np.ndarray) -> int:
         """Return length of the longest True-run in a boolean array."""
         if mask.size == 0:
@@ -254,6 +230,33 @@ class JointLimitMetric(MetricBase):
         runs = ends[:n] - starts[:n]
         return int(runs.max()) if runs.size else 0
 
+    # ----- normalization --------------------------------------------------
+
+    @staticmethod
+    def _normalize_joint_limits(limits):
+        """Normalize joint_limits from various formats to {key: (low, high)}."""
+        if limits is None:
+            return None
+        # Format 1: dict values
+        if isinstance(limits, dict):
+            result = {}
+            for k, v in limits.items():
+                if isinstance(v, dict) and "low" in v and "high" in v:
+                    result[k] = (v["low"], v["high"])
+                elif isinstance(v, (list, tuple)) and len(v) >= 2:
+                    result[k] = (v[0], v[1])
+                else:
+                    continue
+            return result if result else None
+        # Format 2: list of (low, high) tuples
+        if isinstance(limits, list):
+            result = {}
+            for i, item in enumerate(limits):
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    result[str(i)] = (item[0], item[1])
+            return result if result else None
+        return None
+
     # ----- main compute ---------------------------------------------------
 
     def compute(self, episode: EpisodeData) -> MetricResult:
@@ -269,22 +272,13 @@ class JointLimitMetric(MetricBase):
             "max_jump_ratio": 0.0,
         }
 
-        limits = episode.meta.get("joint_limits")
+        raw_limits = episode.meta.get("joint_limits")
+        limits = self._normalize_joint_limits(raw_limits)
         if limits is None:
             return MetricResult.make_na(
                 name=self.name,
                 reason="joint_limits_not_provided",
                 message="Joint limits not provided; skipping check.",
-                details=details,
-            )
-
-        # Normalize joint_limits to [(low, high), ...] format
-        limits = self._normalize_joint_limits(limits)
-        if limits is None:
-            return MetricResult.make_na(
-                name=self.name,
-                reason="joint_limits_unrecognized_format",
-                message="Joint limits format not recognized; skipping check.",
                 details=details,
             )
 
@@ -327,8 +321,35 @@ class JointLimitMetric(MetricBase):
         global_min_margin = 1.0
         global_max_jump_ratio = 0.0
 
+        # Build lookup: try "observation.state.{j}" or fallback to str(j)
+        _limit_keys = list(limits.keys())
+        _use_dotted = all('.' in k for k in _limit_keys)
+
         for j in range(n_checked):
-            low, high = limits[j]
+            if _use_dotted:
+                # Try common prefixes for this joint index
+                _found = False
+                for prefix in ("observation.state", "state"):
+                    _k = f"{prefix}.{j}"
+                    if _k in limits:
+                        low, high = limits[_k]
+                        _found = True
+                        break
+                if not _found:
+                    # Fallback: try plain index or first available by position
+                    if str(j) in limits:
+                        low, high = limits[str(j)]
+                    elif j < len(_limit_keys):
+                        low, high = limits[_limit_keys[j]]
+                    else:
+                        continue
+            else:
+                if str(j) in limits:
+                    low, high = limits[str(j)]
+                elif j < len(_limit_keys):
+                    low, high = limits[_limit_keys[j]]
+                else:
+                    continue
             joint_range = high - low
             if joint_range <= 0:
                 continue

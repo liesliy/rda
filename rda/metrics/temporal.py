@@ -147,6 +147,23 @@ class TimestampValidityMetric(MetricBase):
             "mean": stats["mean_ms"], "std": stats["std_ms"],
         }
 
+        # Gap detection: find abnormally large inter-frame intervals
+        dt_ms = dt * 1000.0
+        median_dt_ms = stats["median_ms"]
+        if median_dt_ms > 0:
+            gap_threshold = median_dt_ms * 2.5
+            gap_mask = dt_ms > gap_threshold
+            gap_count = int(gap_mask.sum())
+            gap_positions = [int(i) for i in np.where(gap_mask)[0]]
+            gap_total_duration = float(np.sum(dt_ms[gap_mask])) if gap_count > 0 else 0.0
+        else:
+            gap_count = 0
+            gap_positions = []
+            gap_total_duration = 0.0
+        details["gap_count"] = gap_count
+        details["gap_positions"] = gap_positions
+        details["gap_total_duration"] = gap_total_duration
+
         # Fail hard on non-monotonic or negative deltas
         if not monotonic or negative > 0:
             reasons = []
@@ -173,6 +190,11 @@ class TimestampValidityMetric(MetricBase):
             )
             if duplicates > 0:
                 msg = f"Timestamps monotonic but {duplicates} duplicate(s) ({dup_ratio:.1%} of intervals)."
+            if gap_count > 0:
+                msg += (
+                    f" Detected {gap_count} inter-frame gap(s) "
+                    f"(total {gap_total_duration:.2f} ms) exceeding 2.5× median dt."
+                )
             return MetricResult.make_pass(
                 name=self.name,
                 measurement={"score_compat": score_compat, "duplicates": duplicates, "median_dt_ms": stats["median_ms"]},
@@ -310,7 +332,7 @@ class SensorSyncMetric(MetricBase):
 
 class JitterMetric(MetricBase):
     name = "sampling_jitter"
-    description = "Measure inter-frame timestamp jitter (CV = std/mean)."
+    description = "Measure inter-frame timestamp jitter using gap-aware robust CV."
 
     def compute(self, episode: EpisodeData) -> MetricResult:
         ts = episode.timestamps
@@ -322,38 +344,75 @@ class JitterMetric(MetricBase):
                 details={"mean_interval_ms": 0.0, "jitter_ms": 0.0, "jitter_ratio": 0.0},
             )
 
-        dt = np.diff(np.asarray(ts, dtype=np.float64))
+        ts_arr = np.asarray(ts, dtype=np.float64)
+        dt = np.diff(ts_arr)
         dt_ms = dt * 1000.0
+
+        # Raw CV (all intervals)
         mean_dt = float(np.mean(dt_ms))
         std_dt = float(np.std(dt_ms))
-        cv = std_dt / mean_dt if mean_dt > 0 else 0.0
+        cv_raw = std_dt / mean_dt if mean_dt > 0 else 0.0
 
-        stats = _dt_stats(ts)
+        # Gap detection: exclude abnormally large intervals
+        median_dt_ms = float(np.median(dt_ms))
+        if median_dt_ms > 0:
+            gap_threshold = median_dt_ms * 2.5
+            gap_mask = dt_ms > gap_threshold
+        else:
+            gap_mask = np.zeros(dt_ms.shape, dtype=bool)
+
+        normal_dt = dt_ms[~gap_mask]
+        gap_count = int(gap_mask.sum())
+
+        # Robust CV (excluding gaps)
+        if normal_dt.size > 0:
+            cv_robust = float(np.std(normal_dt) / np.mean(normal_dt)) if float(np.mean(normal_dt)) > 0 else 0.0
+        else:
+            cv_robust = 0.0
+
+        stats = _dt_stats(ts_arr)
         details = {
             "mean_interval_ms": mean_dt,
-            "jitter_ms": std_dt,
-            "jitter_ratio": cv,
+            "jitter_ms": float(np.std(normal_dt)) if normal_dt.size > 0 else 0.0,
+            "jitter_ratio": cv_robust,
+            "cv_raw": cv_raw,
+            "gap_count": gap_count,
             "dt_ms": {
                 "median": stats["median_ms"], "p95": stats["p95_ms"],
                 "p99": stats["p99_ms"], "max": stats["max_ms"],
             },
         }
 
-        msg = f"Sampling jitter CV = {cv:.4f} (mean dt = {mean_dt:.2f} ms, std = {std_dt:.2f} ms)."
+        if gap_count > 0:
+            msg = (
+                f"Sampling jitter robust CV = {cv_robust:.4f} "
+                f"(excluded {gap_count} gap(s); raw CV = {cv_raw:.4f}, "
+                f"mean dt = {mean_dt:.2f} ms)."
+            )
+        else:
+            msg = (
+                f"Sampling jitter robust CV = {cv_robust:.4f} "
+                f"(no gaps detected; raw CV = {cv_raw:.4f}, "
+                f"mean dt = {mean_dt:.2f} ms)."
+            )
 
-        # Pure observational. Include jitter_ratio (= CV) explicitly so that
-        # audit.rules.compute_behavior_severity, which reads measurement
-        # "jitter_ratio", can surface this diagnostic; previously only
-        # "cv"/"jitter_ms" were emitted, so the finding never fired.
         return MetricResult.make_pass(
             name=self.name,
-            measurement={"score_compat": 1.0, "cv": cv, "jitter_ms": std_dt, "jitter_ratio": cv},
+            measurement={
+                "score_compat": 1.0,
+                "cv": cv_robust,
+                "cv_raw": cv_raw,
+                "jitter_ms": details["jitter_ms"],
+                "jitter_ratio": cv_robust,
+                "gap_count": gap_count,
+            },
             message=msg,
             details=details,
             baseline={
-                "method": "coefficient_of_variation",
+                "method": "robust_cv_excluding_gaps",
                 "scope": "episode",
-                "reference_population": int(dt.size),
+                "reference_population": int(normal_dt.size),
+                "gaps_excluded": gap_count,
             },
         )
 

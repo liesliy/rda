@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.12 - 2026-09-16
+
+### Fixed
+- Ship `video_integrity.py` and `visual_quality.py` in the published
+  package (present in the repository since 0.9.9 but omitted from the
+  0.9.11 build artifact).
+
+## 0.9.11 - 2026-09-16
+
+### Added
+- **Timestamp gap detection** (`timestamp_validity`): flag inter-frame
+  intervals exceeding `2.5 × median dt` and emit `gap_count`,
+  `gap_positions` and `gap_total_duration` (ms). The 2.5x multiplier is
+  an internal constant, not user-facing. Gap information is reported but
+  does not change the verdict by default.
+- **Missing-frame Path B** (`missing_dropout`): when `frame_index` is
+  unavailable (e.g. Parquet), infer dropped frames from timestamp gaps
+  (`round(dt / median_dt) - 1` per gap). Outputs
+  `missing_detection_method: "timestamp_gap_inference"`, `gap_count`,
+  `gap_positions` and `gap_total_duration`. Frame-index detection, when
+  available, is labelled `"frame_index"`.
+- **Gap-aware robust jitter** (`sampling_jitter`): report
+  `cv_raw` over all intervals plus a robust CV that excludes gap
+  intervals (`method: "robust_cv_excluding_gaps"`, `gaps_excluded`).
+- Hierarchical LeRobot v3.0+ `state.*` handling for joint limits and
+  schema checks, including the G1_WBT observation naming convention.
+
+### Notes
+- 0.9.10 was not released (version number skipped during local builds).
+
+## 0.9.9 - 2026-09-15
+
+### Changed
+- Rewrite README to be concise and results-driven (recommendations
+  section removed).
+- Loader passes `joint_limits` and declared features through to episodes;
+  `schema_consistency` cross-validates actual vs declared dimensions.
+- Sync API client User-Agent to the package version.
+
 ## 0.9.8 - 2026-09-15
 
 ### Fixed

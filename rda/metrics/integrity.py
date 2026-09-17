@@ -5,7 +5,7 @@ level — frame completeness, value validity, and structural consistency.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -88,8 +88,45 @@ class MissingFramesMetric(MetricBase):
             expected = np.arange(frame_index.size)
             missing_mask = ~np.isin(expected, frame_index)
             details["missing_frames"] = int(missing_mask.sum())
+            details["missing_detection_method"] = "frame_index"
         elif n_frames > 0:
-            details["missing_frames"] = 0
+            # Path B: infer missing frames from timestamp gaps
+            timestamps = getattr(episode, "timestamps", None)
+            _ts_arr: np.ndarray | None = None
+            if timestamps is not None:
+                try:
+                    _ts_arr = np.asarray(timestamps, dtype=np.float64)
+                except Exception:
+                    _ts_arr = None
+
+            if _ts_arr is not None and _ts_arr.size >= 2:
+                dt = np.diff(_ts_arr)
+                median_dt = float(np.median(dt))
+                if median_dt > 0:
+                    gap_threshold = median_dt * 2.5
+                    gap_mask = dt > gap_threshold
+                    gap_indices = np.where(gap_mask)[0]
+                    gap_count = int(gap_mask.sum())
+                    inferred_missing = 0
+                    gap_positions: List[int] = []
+                    gap_total_duration = 0.0
+                    for idx in gap_indices:
+                        missing_here = int(round(float(dt[idx]) / median_dt)) - 1
+                        if missing_here > 0:
+                            inferred_missing += missing_here
+                            gap_positions.append(int(idx))
+                            gap_total_duration += float(dt[idx])
+                    details["missing_frames"] = inferred_missing
+                    details["missing_detection_method"] = "timestamp_gap_inference"
+                    details["gap_count"] = gap_count
+                    details["gap_positions"] = gap_positions
+                    details["gap_total_duration"] = gap_total_duration
+                else:
+                    details["missing_frames"] = 0
+                    details["missing_detection_method"] = "timestamp_gap_inference"
+            else:
+                details["missing_frames"] = 0
+                details["missing_detection_method"] = "timestamp_gap_inference"
 
         features = _collect_numeric_features(episode)
 
@@ -232,11 +269,9 @@ class SchemaShapeMetric(MetricBase):
             "num_frames": episode.num_frames,
             "features": {},
             "length_mismatches": [],
-            "dimension_mismatches": [],
         }
 
         length_mismatches: List[str] = []
-        dimension_mismatches: List[Dict[str, Any]] = []
         features_info: Dict[str, Dict[str, Any]] = {}
 
         all_features: Dict[str, np.ndarray] = {}
@@ -258,45 +293,56 @@ class SchemaShapeMetric(MetricBase):
             if arr.shape[0] != episode.num_frames:
                 length_mismatches.append(key)
 
-        # --- Dimension cross-validation against info.json declared shapes ---
-        declared_features = episode.meta.get("declared_features")
-        if declared_features and isinstance(declared_features, dict):
-            for feature_name, feature_info in declared_features.items():
-                if not isinstance(feature_info, dict):
-                    continue
-                expected_shape = feature_info.get("shape")
-                if not expected_shape or not isinstance(expected_shape, list):
-                    continue
-                # expected_shape[0] is the time dim (matches num_frames),
-                # expected_shape[1:] are the per-frame dimensions.
-                expected_per_frame = expected_shape[1:] if len(expected_shape) > 1 else []
-                if not expected_per_frame:
-                    continue
-                actual_arr = all_features.get(feature_name)
-                if actual_arr is None or len(actual_arr) == 0:
-                    continue
-                actual_per_frame = _feature_shape_signature(actual_arr)
-                if actual_per_frame and tuple(expected_per_frame) != actual_per_frame:
-                    dimension_mismatches.append({
-                        "feature": feature_name,
-                        "expected_shape": expected_shape,
-                        "actual_shape": [int(actual_arr.shape[0])] + list(actual_per_frame),
-                        "type": "shape_mismatch",
-                    })
-
         details["features"] = features_info
         details["length_mismatches"] = length_mismatches
+
+        # Cross-validate actual data dimensions with declared shapes from info.json
+        dimension_mismatches: List[str] = []
+        declared_features = episode.meta.get("declared_features")
+        if declared_features:
+            all_obs: Dict[str, Any] = {}
+            all_obs.update(episode.observation)
+            all_obs.update(episode.action)
+
+            for key, spec in declared_features.items():
+                declared_shape = spec.get("shape", [])
+                if not declared_shape:
+                    continue
+
+                # Map declared feature keys to actual episode data keys
+                # info.json uses "observation.state" but episode.observation uses "state"
+                lookup_key = key
+                if key.startswith("observation."):
+                    lookup_key = key[len("observation."):]
+                elif key == "action":
+                    lookup_key = "action"  # action is stored as episode.action["action"]
+
+                arr = all_obs.get(lookup_key)
+                if arr is None:
+                    continue
+
+                if hasattr(arr, 'shape'):
+                    actual_shape = list(arr.shape)
+                else:
+                    actual_shape = [len(arr)]
+
+                # Compare dimensions: declared_shape from info.json does NOT include frame dim,
+                # actual_shape does. Strip frame dim from actual only.
+                declared_dims = list(declared_shape)
+                actual_dims = list(actual_shape[1:]) if len(actual_shape) > 1 else []
+
+                if declared_dims and actual_dims and declared_dims != actual_dims:
+                    dimension_mismatches.append(
+                        f"{key}_declared_{declared_dims}_actual_{actual_dims}"
+                    )
+
         details["dimension_mismatches"] = dimension_mismatches
 
-        total_issues = len(length_mismatches) + len(dimension_mismatches)
-        passed = total_issues == 0
+        all_mismatches = length_mismatches + dimension_mismatches
+        passed = len(all_mismatches) == 0
 
         if passed:
-            parts = [f"All {len(all_features)} features have consistent shape"]
-            if declared_features:
-                parts.append(f"and match {len(declared_features)} declared feature(s)")
-            parts.append("within the episode.")
-            msg = " ".join(parts)
+            msg = f"All {len(all_features)} features have consistent shape within the episode."
             return MetricResult.make_pass(
                 name=self.name,
                 measurement={"score_compat": 1.0, "mismatch_count": 0},
@@ -304,22 +350,15 @@ class SchemaShapeMetric(MetricBase):
                 details=details,
             )
         else:
-            issue_parts = []
+            parts: List[str] = []
             if length_mismatches:
-                issue_parts.append(
-                    f"{len(length_mismatches)} feature(s) with frame-count mismatch: "
-                    + ", ".join(length_mismatches)
-                )
+                parts.append(f"{len(length_mismatches)} first-dim length mismatch(es): {', '.join(length_mismatches)}")
             if dimension_mismatches:
-                feature_names = [m["feature"] for m in dimension_mismatches]
-                issue_parts.append(
-                    f"{len(dimension_mismatches)} feature(s) with dimension mismatch: "
-                    + ", ".join(feature_names)
-                )
-            msg = "; ".join(issue_parts) + "."
+                parts.append(f"{len(dimension_mismatches)} dimension mismatch(es): {', '.join(dimension_mismatches)}")
+            msg = "Schema check failed: " + "; ".join(parts) + "."
             return MetricResult.make_exclude(
                 name=self.name,
-                reason=f"{total_issues} schema issue(s)",
+                reason="; ".join(parts),
                 message=msg,
                 details=details,
             )
