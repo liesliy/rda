@@ -104,6 +104,44 @@ def _load_info_json(dataset_path: Path) -> dict:
 
 
 
+def _extract_video_features_for_v21(info: dict, ep_index: int) -> Dict[str, Dict[str, Any]]:
+    """Extract video feature references for v2.1 format datasets.
+
+    v2.1 stores videos at ``videos/chunk-XXX/<feature>/episode_XXXXXX.mp4``.
+    This helper constructs the video_features dict from info.json features,
+    computing the episode_chunk from chunks_size and episode_index.
+    """
+    features = info.get("features", {})
+    chunks_size = info.get("chunks_size", 1000)
+    episode_chunk = ep_index // chunks_size if chunks_size else 0
+
+    video_features = {}
+    for key, spec in features.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("dtype") != "video":
+            continue
+        video_features[key] = {
+            "chunk_index": episode_chunk,
+            "file_index": ep_index,
+            "episode_index": ep_index,
+            "v21_format": True,
+        }
+    return video_features
+
+
+def _extract_video_features_from_info(info: dict) -> Dict[str, Dict[str, Any]]:
+    """Extract video feature definitions from info.json features dict."""
+    features = info.get("features", {})
+    video_features = {}
+    for key, spec in features.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("dtype") == "video":
+            video_features[key] = {"dtype": "video", "shape": spec.get("shape")}
+    return video_features
+
+
 def _extract_joint_limits_from_info(info):
     """Extract joint_limits from info.json features if available."""
     features = info.get("features", {})
@@ -688,7 +726,9 @@ def _read_episode_parquet_v21(
     else:
         ep_df = df.reset_index(drop=True)
 
-    return _extract_episode_from_dataframe(ep_df, ep_index, fps, "v2.1")
+    episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, "v2.1")
+    episode.meta["dataset_root"] = str(dataset_path)
+    return episode
 
 
 # ---------------------------------------------------------------------------
@@ -946,6 +986,8 @@ def iter_episodes(
             ep_metadata = _load_episode_metadata_v21(dataset_path)
             # Build file index once for efficiency
             file_index = _build_episode_file_index_v21(dataset_path)
+            # Extract video features definition from info.json for v2.1
+            v21_video_features_template = _extract_video_features_for_v21(info, 0)
 
             count = 0
             for _, ep_row in ep_metadata.iterrows():
@@ -959,6 +1001,17 @@ def iter_episodes(
                         ep.meta["joint_limits"] = joint_limits
                     if declared_features:
                         ep.meta["declared_features"] = declared_features
+                    # Inject video_features for v2.1 format
+                    ep_idx = int(ep_row["episode_index"])
+                    v21_vf = _extract_video_features_for_v21(info, ep_idx)
+                    if v21_vf:
+                        # Add from_timestamp and to_timestamp for each video feature
+                        # In v2.1, each episode has its own video file
+                        for feat_key in v21_vf:
+                            v21_vf[feat_key]["from_timestamp"] = 0.0
+                            v21_vf[feat_key]["to_timestamp"] = ep.num_frames / fps if fps else 0.0
+                        ep.meta["video_features"] = v21_vf
+                        ep.meta["fps"] = fps
                     yield ep
                 except Exception as e:
                     import warnings

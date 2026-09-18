@@ -133,10 +133,12 @@ class VideoFrameIntegrityMetric(MetricBase):
         for feature, info in sorted(video_features.items()):
             chunk = info.get("chunk_index")
             file_idx = info.get("file_index")
+            ep_index = info.get("episode_index")
             if chunk is None or file_idx is None:
                 unreadable.append(feature)
                 continue
 
+            # Try v3.0 format first: videos/<feature>/chunk-XXX/file-XXX.mp4
             video_path = (
                 root
                 / "videos"
@@ -144,6 +146,15 @@ class VideoFrameIntegrityMetric(MetricBase):
                 / f"chunk-{int(chunk):03d}"
                 / f"file-{int(file_idx):03d}.mp4"
             )
+            # Fallback to v2.1 format: videos/chunk-XXX/<feature>/episode_XXXXXX.mp4
+            if not video_path.exists() and ep_index is not None:
+                video_path = (
+                    root
+                    / "videos"
+                    / f"chunk-{int(chunk):03d}"
+                    / feature
+                    / f"episode_{int(ep_index):06d}.mp4"
+                )
             if not video_path.exists():
                 unreadable.append(feature)
                 continue

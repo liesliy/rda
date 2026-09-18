@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.13 - 2026-09-18
+
+### Fixed
+- **LeRobot v2.1 video format support**: RDA now correctly locates and audits
+  video files in v2.1 datasets where the directory structure is
+  `videos/chunk-XXX/<feature>/episode_XXXXXX.mp4` (previously only supported
+  v3.0 layout `videos/<feature>/chunk-XXX/file-XXX.mp4`).
+- Added `_extract_video_features_for_v21()` helper to reconstruct video feature
+  metadata from info.json for v2.1 datasets.
+- Added `dataset_root` to v2.1 episode metadata so video-dependent metrics
+  (stream presence, frame integrity, freeze detection, timestamp alignment)
+  can resolve file paths.
+- Video frame integrity, freeze detection, and timestamp alignment metrics
+  now fall back to v2.1 path layout when v3.0 paths are not found.
+
 ## 0.9.12 - 2026-09-16
 
 ### Fixed

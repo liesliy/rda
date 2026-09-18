@@ -211,16 +211,47 @@ def _moving_mask(
 def _resolve_video_path(
     root: Path, feature: str, info: Dict[str, Any]
 ) -> Optional[Path]:
-    """Resolve the video file path for a feature. Returns None if unresolvable."""
+    """Resolve the video file path for a feature. Returns None if unresolvable.
+
+    Supports both v3.0 format (videos/<feature>/chunk-XXX/file-XXX.mp4)
+    and v2.1 format (videos/chunk-XXX/<feature>/episode_XXXXXX.mp4).
+    """
     chunk = info.get("chunk_index")
     file_idx = info.get("file_index")
-    if chunk is None or file_idx is None:
-        return None
-    video_path = (
-        root / "videos" / feature
-        / f"chunk-{int(chunk):03d}" / f"file-{int(file_idx):03d}.mp4"
-    )
-    return video_path if video_path.exists() else None
+    ep_index = info.get("episode_index")
+
+    # Try v3.0 format first: videos/<feature>/chunk-XXX/file-XXX.mp4
+    if chunk is not None and file_idx is not None:
+        v30_path = (
+            root / "videos" / feature
+            / f"chunk-{int(chunk):03d}" / f"file-{int(file_idx):03d}.mp4"
+        )
+        if v30_path.exists():
+            return v30_path
+
+    # Try v2.1 format: videos/chunk-XXX/<feature>/episode_XXXXXX.mp4
+    if chunk is not None and ep_index is not None:
+        v21_path = (
+            root / "videos"
+            / f"chunk-{int(chunk):03d}"
+            / feature
+            / f"episode_{int(ep_index):06d}.mp4"
+        )
+        if v21_path.exists():
+            return v21_path
+
+    # Also try v2.1 format with file_idx as episode_index fallback
+    if chunk is not None and file_idx is not None and ep_index is None:
+        v21_path_fallback = (
+            root / "videos"
+            / f"chunk-{int(chunk):03d}"
+            / feature
+            / f"episode_{int(file_idx):06d}.mp4"
+        )
+        if v21_path_fallback.exists():
+            return v21_path_fallback
+
+    return None
 
 
 def _pairwise_nearest_offsets(
@@ -776,14 +807,24 @@ class VideoFreezeMetric(MetricBase):
         for feature, info in sorted(video_features.items()):
             chunk = info.get("chunk_index")
             file_idx = info.get("file_index")
+            ep_index = info.get("episode_index")
             from_ts = info.get("from_timestamp")
             to_ts = info.get("to_timestamp")
-            if None in (chunk, file_idx, from_ts, to_ts):
+            if chunk is None or file_idx is None:
                 continue
+            # Try v3.0 format first: videos/<feature>/chunk-XXX/file-XXX.mp4
             video_path = (
                 root / "videos" / feature
                 / f"chunk-{int(chunk):03d}" / f"file-{int(file_idx):03d}.mp4"
             )
+            # Fallback to v2.1 format: videos/chunk-XXX/<feature>/episode_XXXXXX.mp4
+            if not video_path.exists() and ep_index is not None:
+                video_path = (
+                    root / "videos"
+                    / f"chunk-{int(chunk):03d}"
+                    / feature
+                    / f"episode_{int(ep_index):06d}.mp4"
+                )
             if not video_path.exists():
                 continue
             frames = _decode_span_gray(
