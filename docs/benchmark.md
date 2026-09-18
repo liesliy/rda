@@ -1,7 +1,7 @@
-# Benchmark: RDA v0.9.7 on 13 Public LeRobot Datasets + Blind Test
-**RDA version**: 0.9.7 · **Scope**: 4,940 episodes (observation) + 206 episodes (blind test) · **Last run**: 2026-09-15
+# Benchmark: RDA v0.9.7 on 14 Public LeRobot Datasets + Blind Test
+**RDA version**: 0.9.7 · **Scope**: 5,110 episodes (observation) + 206 episodes (blind test) · **Last run**: 2026-09-18
 
-We ran `rda audit` across 13 public LeRobot-format datasets from HuggingFace Hub —
+We ran `rda audit` across 14 public LeRobot-format datasets from HuggingFace Hub —
 sim and real, scripted and human teleop, research arms and hobby hardware —
 with zero tuning per dataset. The same default thresholds, everywhere.
 All data is real, downloaded from HuggingFace Hub, no fabrication.
@@ -14,6 +14,7 @@ All data is real, downloaded from HuggingFace Hub, no fabrication.
 | xarm_lift_medium | real xArm | 800 | 800 / 0 / 0 | 6 (5 eps) | **20.8%** | 2.4% |
 | xarm_push_medium | real xArm | 800 | 800 / 0 / 0 | 845 (500 eps) | 83.3% | 1.7% |
 | utokyo_pr2_tabletop | sim PR2 / RLDS | 240 | 240 / 0 / 0 | 681 (202 eps) | 83.6% | 5.0% |
+| imperialcollege_sawyer_wrist_cam | real Sawyer / RLDS | 170 | 42 / 128 / 0 | 1,018 (170 eps) | **94.7%** | 20.0% |
 | cmu_stretch | real Stretch | 135 | 135 / 0 / 0 | 3,855 (135 eps) | 66.7% | 1.9% |
 | droid_100 | real Franka | 100 | 100 / 0 / 0 | 1,428 (99 eps) | 70.7% | 4.8% |
 | **libero_10** | sim Panda / teleop | 379 | **373 / 6 / 0** | 3,622 (379 eps) | 71.7% | 6.6% |
@@ -22,7 +23,19 @@ All data is real, downloaded from HuggingFace Hub, no fabrication.
 | aloha_sim_insertion_human | sim ALOHA / teleop | 50 | 50 / 0 / 0 | 1,338 (50 eps) | 70.7% | 3.8% |
 | aloha_sim_insertion_scripted | sim ALOHA / scripted | 50 | 50 / 0 / 0 | 1,633 (50 eps) | 63.7% | 4.2% |
 | aloha_sim_transfer_cube_scripted | sim ALOHA / scripted | 50 | 50 / 0 / 0 | 2,489 (50 eps) | 64.0% | 5.0% |
-| svla_so101_pickplace | real SO-100 | 50 | 50 / 0 / 0 | 260 (50 eps) | **86.7%** | 4.5% |
+| svla_so101_pickplace | real SO-100 | 50 | 50 / 0 / 0 | 260 (50 eps) | 86.7% | 4.5% |
+
+### Addition (2026-09-18): imperialcollege_sawyer_wrist_cam
+
+Real Sawyer teleop (RLDS port): 170 episodes, 17 household tasks, 5 fps, 64x64
+video, 1-D state + 8-D action. First benchmark dataset where Layer-1
+`video_timestamp_alignment` drives the verdicts: video/parquet spans differ by
+one frame (0.2 s) on 128/170 episodes - a 2.4% median drift ratio, above the 2%
+soft tolerance but inside the 10% hard tolerance - putting all 128 in REVIEW.
+Median idle is 94.7%, the new benchmark high (idle_ratio flags all 170 episodes
+but no longer escalates verdicts under v0.9.7). State occupancy (20.0%) is
+measured on a 1-D state grid and is not directly comparable with multi-DOF
+datasets.
 
 ### v0.9.7 verdict pipeline change
 
@@ -36,8 +49,10 @@ to REVIEW. This significantly reduces false-positive REVIEWs on low-motion datas
 
 ### Layer 1 integrity
 
-All 13 datasets pass Layer 1 (data integrity) checks:
+13 of 14 datasets pass all Layer 1 (data integrity) checks:
 no missing data, no NaN values, no schema inconsistencies, no timestamp anomalies.
+Exception: `imperialcollege_sawyer_wrist_cam` - video/parquet span drift above the
+2% soft tolerance on 128/170 episodes (REVIEW, not EXCLUDE; see Addition note).
 
 ## Blind test (2026-09-14, v0.9.7)
 
@@ -71,7 +86,7 @@ should be addressed in a future release.
 
 ## Five patterns worth knowing before you train
 
-**1. Median idle runs 20.8%–86.7%, and 11 of 13 datasets sit above 63%.**
+**1. Median idle runs 20.8%–94.7%, and all but one dataset sit above 63%.**
 Loss functions trained on a 75%-idle distribution are structurally biased
 toward predicting "do nothing" unless you weight or curriculum around it.
 
@@ -86,7 +101,7 @@ across 800 episodes. If your policy uses smoothness regularization, this
 number decides your curriculum.
 
 **4. Clean integrity ≠ good training data.**
-All 13 datasets pass Layer 1 integrity. The behavior layer still flags
+All 14 datasets pass Layer 1 hard checks. The behavior layer still flags
 many episodes with risk signals. Both layers matter; most pipelines check neither.
 
 **5. State space occupancy is uniformly low.**
@@ -111,6 +126,6 @@ All JSON reports saved in `rda_benchmark_v097/` directory.
 - RDA flags statistical anomalies, not ground-truth errors. REVIEW means
   "look before you train," not "discard."
 - These are default thresholds with zero per-dataset tuning.
-- All 13 datasets audited at v0.9.7; verdict numbers reflect the new
+- All 14 datasets audited at v0.9.7; verdict numbers reflect the new
   pipeline (fewer REVIEWs for low-motion datasets compared to v0.8.0).
 - Blind test frozen episode detection is a known regression in v0.9.7.
