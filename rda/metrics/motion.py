@@ -505,8 +505,9 @@ class ActionDiscontinuityMetric(MetricBase):
 
     spike_threshold: float = 5.0
 
-    def __init__(self, spike_threshold: float = 5.0) -> None:
+    def __init__(self, spike_threshold: float = 5.0, top_k_joints: int = 0) -> None:
         self.spike_threshold = float(spike_threshold)
+        self.top_k_joints = int(top_k_joints)
 
     def _mad_zscore(self, values: np.ndarray) -> np.ndarray:
         if values.size == 0:
@@ -606,6 +607,13 @@ class ActionDiscontinuityMetric(MetricBase):
                 by_joint[f"joint_{j}"] = {"spike_count": j_spikes, "max_second_delta": j_max}
         details["by_joint"] = by_joint
 
+        # T-13: Build top-level by_joint for measurement (sorted, optionally truncated)
+        sorted_by_joint = dict(
+            sorted(by_joint.items(), key=lambda x: x[1].get("spike_count", 0), reverse=True)
+        )
+        if self.top_k_joints > 0:
+            sorted_by_joint = dict(list(sorted_by_joint.items())[:self.top_k_joints])
+
         # --- OBSERVATIONAL: always pass, report as measurement ---
         n_steps = max(delta2_norm.size, 1)
         spike_ratio = spike_count / n_steps
@@ -630,6 +638,7 @@ class ActionDiscontinuityMetric(MetricBase):
                 "max_second_delta": float(max_delta2),
                 "affected_joints": affected_joints,
                 "total_joints": D,
+                "by_joint": sorted_by_joint,
             },
             message=msg,
             details=details,

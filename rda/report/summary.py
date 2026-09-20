@@ -114,6 +114,24 @@ def build_summary(result: DatasetAuditResult) -> AuditSummary:
 # Three-layer text report
 # ---------------------------------------------------------------------------
 
+def _get_freeze_motion_source_text(result: DatasetAuditResult) -> str:
+    """Extract motion source info from the first available video_freeze result."""
+    for ep in result.episodes.values():
+        m = ep.metrics.get("video_freeze")
+        if m is None:
+            continue
+        if m.availability != MetricAvailability.AVAILABLE:
+            continue
+        details = m.details or {}
+        source = details.get("freeze_motion_source", "action")
+        cv_count = details.get("state_cross_validated_segments", 0)
+        parts = [source]
+        if cv_count > 0:
+            parts.append(f"{cv_count} segment(s) downgraded via state cross-validation")
+        return ", ".join(parts)
+    return ""
+
+
 def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     """Format the full v0.9 four-section audit report as text.
 
@@ -146,6 +164,10 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
     lines.append("=" * 60)
     lines.append(f"  Dataset: {dataset_path}")
     lines.append(f"  Episodes: {total} | Frames: {total_frames:,}")
+
+    # T-12: Show inferred action unit
+    action_unit = result.dataset_info.meta.get("action_unit", "unknown") if result.dataset_info else "unknown"
+    lines.append(f"  Action unit: {action_unit}")
 
     # D-17 (v0.9.4): show execution tier
     execution_tier = getattr(result, "execution_tier", None)
@@ -185,6 +207,11 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
             lines.append(f"  {metric_name:28s} {verif}  {passed}/{avail} pass ({pass_rate:.0%})")
         else:
             lines.append(f"  {metric_name:28s} {verif}  N/A ({na} episodes)")
+        # D-22: show video_freeze motion source info
+        if metric_name == "video_freeze" and avail > 0:
+            _motion_source_text = _get_freeze_motion_source_text(result)
+            if _motion_source_text:
+                lines.append(f"    ↳ motion source: {_motion_source_text}")
     lines.append("")
 
     # ── Trajectory Diagnostics (L2) ──

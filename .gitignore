@@ -30,3 +30,12 @@ rda_report.json
 Thumbs.db
 benchmarks/results/
 benchmarks/results/
+
+# CodeAct runtime
+codeact/
+
+# Demo outputs
+demo_output/
+
+# Dev plan (generated)
+RDA开发计划表.html

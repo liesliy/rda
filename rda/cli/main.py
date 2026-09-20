@@ -147,6 +147,19 @@ def cli(ctx: click.Context) -> None:
         "Equivalent to --video-quality but more explicit."
     ),
 )
+@click.option(
+    "--freeze-motion-source",
+    "freeze_motion_source",
+    type=click.Choice(["action", "state", "auto"], case_sensitive=False),
+    default="action",
+    show_default=True,
+    help=(
+        "Motion signal source for video_freeze detection. "
+        "action=pure visual (default), "
+        "state=cross-validate with state data, "
+        "auto=choose automatically."
+    ),
+)
 def audit(
     path: Path,
     output: Optional[Path],
@@ -159,6 +172,7 @@ def audit(
     no_video: bool,
     video_only: bool,
     full_audit: bool,
+    freeze_motion_source: str,
 ) -> None:
     """Audit a LeRobot dataset at the given PATH.
 
@@ -287,7 +301,10 @@ def audit(
         click.echo("")
 
     # --- Run the audit ------------------------------------------------------
-    auditor = DatasetAuditor(execution_tier=execution_tier)
+    metric_kwargs = {
+        "video_freeze": {"motion_source": freeze_motion_source},
+    }
+    auditor = DatasetAuditor(execution_tier=execution_tier, metric_kwargs=metric_kwargs)
     try:
         episode_iter = iter_episodes(path_str)
         result = auditor.audit_dataset(dataset_info, episode_iter)

@@ -28,7 +28,7 @@ rule-based verdict — full backward compatibility.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from rda.audit.rules import (
     AuditVerdict,
@@ -109,6 +109,7 @@ class EpisodeAuditor:
         metrics: Sequence[MetricBase] | None = None,
         scorer: object | None = None,
         execution_tier: object | None = None,
+        metric_kwargs: Dict[str, Dict[str, Any]] | None = None,
     ) -> None:
         """Initialize the episode auditor.
 
@@ -120,8 +121,15 @@ class EpisodeAuditor:
                 hard import dependency on the calibration module.
             execution_tier: Execution tier for filtering metrics (v0.9.4).
                 When provided, metrics are filtered according to the tier.
+            metric_kwargs: Optional mapping from metric name to extra
+                constructor keyword arguments. When a metric class is
+                instantiated, any kwargs keyed by its ``name`` are passed
+                through. This allows CLI-level options (e.g.
+                ``freeze_motion_source`` for ``video_freeze``) to
+                configure individual metrics without hard-coding them.
         """
         self.execution_tier = execution_tier
+        self._metric_kwargs = metric_kwargs or {}
         if metrics is None:
             from rda.metrics import ALL_METRICS
 
@@ -135,7 +143,10 @@ class EpisodeAuditor:
             allowed_names = filter_metrics_by_tier(all_names, execution_tier)
             metric_classes = [cls for cls in metric_classes if cls.name in allowed_names]
 
-        self.metrics: List[MetricBase] = [cls() for cls in metric_classes]
+        self.metrics: List[MetricBase] = [
+            cls(**self._metric_kwargs.get(cls.name, {}))
+            for cls in metric_classes
+        ]
         self.scorer = scorer
 
     def audit(self, episode: EpisodeData) -> EpisodeAuditResult:

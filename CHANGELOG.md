@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.9.14 - 2026-09-20
+
+### Added
+- **Action unit inference** (`dataset_summary.action_unit`): loader now
+  infers whether action values are `degrees`, `radians`, `normalized`,
+  `raw_steps`, `mixed`, or `unknown` by combining info.json explicit
+  fields, feature name suffixes (`.pos`/`.rad`/`.norm`/`.step`) and
+  value-range heuristics. Label is surfaced in JSON report and text
+  summary.
+- **Per-joint spike breakdown at top-level measurement**:
+  `action_discontinuity` now exposes `by_joint` in `measurement`
+  (sorted by `spike_count` descending), plus a new `top_k_joints`
+  constructor parameter (default `0` = all). `details.by_joint` is
+  preserved for backward compatibility.
+- **video_freeze state cross-validation** (`--freeze-motion-source`):
+  new CLI flag with modes `action` (default, pure vision, unchanged),
+  `state` (cross-validate against `observation.state` motion signal
+  using median + 3×MAD threshold), and `auto` (use state when
+  available, fall back to action otherwise). Reports
+  `freeze_motion_source` and `state_cross_validated_segments` for
+  transparent decision paths. EXCLUDE downgrades to REVIEW only when
+  state confirms whole-machine stall.
+- **INV-011 scale invariance guard test**: new
+  `test_inv011_scale_invariance` verifies that action/state linear
+  transforms (degrees ↔ radians ↔ raw_steps ↔ normalized) leave
+  `spike_count`, `median_idle_ratio` and per-joint `spike_count`
+  invariant.
+
 ## 0.9.13 - 2026-09-18
 
 ### Fixed

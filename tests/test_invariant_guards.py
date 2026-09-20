@@ -625,3 +625,104 @@ class TestINV009VerifiabilityNotMixed:
         assert len(non_video_available) > 0, (
             "INV-009: no non-video metrics are AVAILABLE on a valid episode"
         )
+
+
+# =========================================================================
+# INV-011: Scale invariance of core diagnostic metrics
+# =========================================================================
+
+def test_inv011_scale_invariance():
+    """Guard test for INV-011 (scale invariance of core diagnostic metrics).
+
+    Verifies that the following metrics remain unchanged under linear
+    transformations of the action array (degrees -> radians -> raw_steps ->
+    normalized_01), since these metrics are based on relative statistical
+    properties (MAD z-scores, ratios) that are invariant to affine transforms:
+
+    1. ActionDiscontinuityMetric.spike_count
+    2. ActionDiscontinuityMetric.by_joint[j].spike_count for each joint
+    3. IdleRatioMetric.median_idle_ratio
+
+    Tolerance: 1e-9 for floating-point comparisons.
+    """
+    from rda.metrics.motion import ActionDiscontinuityMetric, IdleRatioMetric
+
+    # Step 1: Construct base action array with fixed seed, with injected spikes
+    rng = np.random.RandomState(42)
+    base_arr = rng.randn(200, 6) * 50  # svla-like scale (normal motion)
+    # Inject large spikes at specific frames to ensure spike_count > 0
+    spike_frames = [20, 50, 80, 110, 150]
+    for sf in spike_frames:
+        base_arr[sf, :] += rng.choice([-1, 1], size=6) * 500  # huge jumps
+
+    # Step 2: Define four linear transformations
+    transforms = {
+        "degrees":       base_arr,
+        "radians":       base_arr * np.pi / 180,
+        "raw_steps":     base_arr * 4096 / 360,
+        "normalized_01": (base_arr + 100) / 200,
+    }
+
+    # Step 3: Compute metrics for each variant
+    disc_results = {}
+    idle_results = {}
+
+    for name, arr in transforms.items():
+        ep = EpisodeData(
+            episode_index=0,
+            num_frames=200,
+            timestamps=np.arange(200, dtype=np.float64) / 30.0,
+            observation={},
+            action={"action": arr},
+            meta={"fps": 30},
+        )
+
+        disc = ActionDiscontinuityMetric().compute(ep)
+        idle = IdleRatioMetric().compute(ep)
+
+        disc_results[name] = disc
+        idle_results[name] = idle
+
+    # Step 4: Non-vacuous check — spike_count must be > 0 for at least one variant
+    spike_counts = [disc_results[k].measurement["spike_count"] for k in transforms]
+    assert any(sc > 0 for sc in spike_counts), (
+        f"INV-011: All spike_counts are 0 — vacuous pass. "
+        f"Counts: {spike_counts}. Increase data magnitude or change seed."
+    )
+
+    # Step 5: All spike_counts must be identical
+    ref_spike = spike_counts[0]
+    for i, (name, sc) in enumerate(zip(transforms, spike_counts)):
+        assert sc == ref_spike, (
+            f"INV-011 VIOLATION: spike_count differs under {name!r} transform. "
+            f"Expected {ref_spike}, got {sc}."
+        )
+
+    # Step 6: All median_idle_ratio values must be equal (tolerance 1e-9)
+    idle_keys = ["median_idle_ratio", "idle_ratio"]
+    idle_key = None
+    for k in idle_keys:
+        if k in idle_results[list(transforms.keys())[0]].measurement:
+            idle_key = k
+            break
+    assert idle_key is not None, "INV-011: Could not find idle ratio key in measurement."
+
+    ref_idle = idle_results[list(transforms.keys())[0]].measurement[idle_key]
+    for name in transforms:
+        val = idle_results[name].measurement[idle_key]
+        assert abs(val - ref_idle) < 1e-9, (
+            f"INV-011 VIOLATION: {idle_key} differs under {name!r} transform. "
+            f"Expected {ref_idle}, got {val}. Difference: {abs(val - ref_idle)}"
+        )
+
+    # Step 7: Per-joint spike_count must be identical across all transforms
+    ref_by_joint = disc_results[list(transforms.keys())[0]].measurement.get("by_joint", {})
+    for name in transforms:
+        by_joint = disc_results[name].measurement.get("by_joint", {})
+        for jname in ref_by_joint:
+            ref_val = ref_by_joint[jname].get("spike_count", 0)
+            act_val = by_joint.get(jname, {}).get("spike_count", 0)
+            assert ref_val == act_val, (
+                f"INV-011 VIOLATION: by_joint[{jname!r}].spike_count differs "
+                f"under {name!r} transform. Expected {ref_val}, got {act_val}."
+            )

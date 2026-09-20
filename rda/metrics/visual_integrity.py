@@ -754,6 +754,13 @@ class VideoFreezeMetric(MetricBase):
     Layer 1 (Data Integrity): a camera that stalled produces identical
     frames while the action timeline keeps advancing — deterministic,
     provable corruption of the visual modality.
+
+    D-22 (v0.9.14): Supports state cross-validation via ``motion_source``.
+    When state data is available and ``motion_source`` is ``"state"`` or
+    ``"auto"``, freeze segments are cross-validated: if the state is also
+    stationary during a visual freeze, the segment is downgraded from
+    EXCLUDE to REVIEW (whole-system idle, not camera drop-out). When
+    state is moving but the visual is frozen, the original verdict is kept.
     """
 
     name = "video_freeze"
@@ -761,6 +768,69 @@ class VideoFreezeMetric(MetricBase):
         "VA-A: frozen-video detection — consecutive identical frames "
         "while joints move (camera drop-out signature)."
     )
+
+    _VALID_MOTION_SOURCES = ("action", "state", "auto")
+
+    def __init__(self, motion_source: str = "action") -> None:
+        """Initialise VideoFreezeMetric.
+
+        Args:
+            motion_source: Source of motion signal for freeze cross-validation.
+                ``"action"`` — pure visual freeze detection (default, unchanged).
+                ``"state"`` — cross-validate with state data when available.
+                ``"auto"`` — use state cross-validation if state data exists,
+                    otherwise fall back to ``"action"`` mode.
+
+        Raises:
+            ValueError: If *motion_source* is not one of the allowed values.
+        """
+        if motion_source not in self._VALID_MOTION_SOURCES:
+            raise ValueError(
+                f"motion_source must be one of {self._VALID_MOTION_SOURCES}, "
+                f"got {motion_source!r}"
+            )
+        self.motion_source = motion_source
+
+    def _state_motion_signal(self, episode: EpisodeData) -> Optional[np.ndarray]:
+        """Compute per-frame state motion intensity from observation.state.
+
+        Uses :func:`rda.metrics.motion._resolve_state_array` to extract the
+        state array, then computes frame-to-frame L2 norm of the difference.
+
+        Returns:
+            1-D array of length ``T-1`` with state motion intensity per
+            frame transition, or ``None`` when state data is unavailable
+            or degenerate.
+        """
+        from rda.metrics.motion import _resolve_state_array
+
+        state_arr = _resolve_state_array(episode)
+        if state_arr is None:
+            return None
+        if not isinstance(state_arr, np.ndarray) or state_arr.ndim < 2:
+            return None
+        if state_arr.shape[0] < 2:
+            return None
+
+        # Ensure float for diff computation
+        state_arr = state_arr.astype(np.float64, copy=False)
+
+        # Replace NaN rows with interpolation-friendly approach: drop NaN rows
+        nan_mask = ~np.isfinite(state_arr).all(axis=1)
+        if nan_mask.all():
+            return None
+        if nan_mask.any():
+            # Keep only finite rows for diff computation
+            state_arr = state_arr[~nan_mask]
+            if state_arr.shape[0] < 2:
+                return None
+
+        diffs = np.diff(state_arr, axis=0)
+        signal = np.linalg.norm(diffs, axis=1)
+
+        if signal.size == 0:
+            return None
+        return signal
 
     def compute(self, episode: EpisodeData) -> MetricResult:
         meta = episode.meta or {}
@@ -799,6 +869,22 @@ class VideoFreezeMetric(MetricBase):
                 reason="no_action_timeline",
                 message="No usable action timeline; freeze-vs-motion cross-check not applicable.",
             )
+
+        # D-22: Determine effective motion source and optionally load state signal
+        effective_motion_source = "action"
+        state_signal: Optional[np.ndarray] = None
+        use_state_cv = False
+
+        if self.motion_source in ("state", "auto"):
+            state_signal = self._state_motion_signal(episode)
+            if state_signal is not None and state_signal.size > 0:
+                use_state_cv = True
+                effective_motion_source = "state"
+            else:
+                # State unavailable — fall back to action mode
+                effective_motion_source = (
+                    "auto_fallback_to_action" if self.motion_source == "auto" else "action"
+                )
 
         min_run_video = max(int(round(_FREEZE_MIN_SECONDS * float(fps))), 2)
         checked = 0
@@ -860,6 +946,38 @@ class VideoFreezeMetric(MetricBase):
                 message="No video spans could be decoded; freeze check skipped.",
             )
 
+        # D-22: State cross-validation of freeze regions
+        state_cross_validated_segments = 0
+        if use_state_cv and state_signal is not None and freeze_regions:
+            state_median = float(np.median(state_signal))
+            state_mad = float(np.median(np.abs(state_signal - state_median)))
+            # Threshold: median + 3 * MAD  (robust outlier boundary)
+            state_threshold = state_median + 3.0 * state_mad
+
+            for region in freeze_regions:
+                p_start = region["parquet_start"]
+                p_end = region["parquet_end"]
+                # Map parquet frame indices to state signal indices
+                # state_signal has length T-1, index i covers frame i -> i+1
+                sig_start = max(p_start, 0)
+                sig_end = min(p_end, state_signal.size - 1)
+                if sig_start > sig_end:
+                    continue
+                segment_signal = state_signal[sig_start:sig_end + 1]
+                if segment_signal.size == 0:
+                    continue
+                avg_state_motion = float(np.mean(segment_signal))
+                region["avg_state_motion"] = round(avg_state_motion, 6)
+
+                # If state motion is below threshold → whole system idle
+                # → downgrade verdict (EXCLUDE → REVIEW)
+                if avg_state_motion <= state_threshold:
+                    region["state_cross_validated"] = True
+                    state_cross_validated_segments += 1
+                else:
+                    # State is moving but video is frozen → genuine camera freeze
+                    region["state_cross_validated"] = False
+
         freeze_regions.sort(key=lambda r: -(r["moving_ratio_in_span"]))
         hard = [r for r in freeze_regions if r["duration_sec"] >= _FREEZE_MIN_SECONDS][
             :_MAX_FREEZE_REPORT
@@ -868,6 +986,8 @@ class VideoFreezeMetric(MetricBase):
             "checked_features": checked,
             "freeze_regions": freeze_regions[:_MAX_FREEZE_REPORT],
             "freeze_region_count": len(freeze_regions),
+            "freeze_motion_source": effective_motion_source,
+            "state_cross_validated_segments": state_cross_validated_segments,
             "params": {
                 "decode": f"{_FREEZE_GRAY_SIZE}x{_FREEZE_GRAY_SIZE} gray",
                 "min_freeze_seconds": _FREEZE_MIN_SECONDS,
@@ -895,7 +1015,48 @@ class VideoFreezeMetric(MetricBase):
             or longest_sec >= _FREEZE_CONCLUSIVE_SECONDS
             or (total_frozen_sec / max(episode_span_sec, 1e-6)) >= _FREEZE_MAX_TOTAL_RATIO
         )
+
+        # D-22: If all freeze segments were state-cross-validated (state also
+        # stationary), downgrade EXCLUDE → REVIEW.  Partial cross-validation
+        # (some segments validated, some not) still triggers EXCLUDE if the
+        # non-validated segments alone are conclusive.
+        non_validated_regions = [
+            r for r in freeze_regions if not r.get("state_cross_validated", False)
+        ]
+
         if conclusive:
+            # Check if ALL regions were cross-validated (state also idle)
+            all_cross_validated = (
+                use_state_cv
+                and state_cross_validated_segments > 0
+                and len(non_validated_regions) == 0
+            )
+            if all_cross_validated:
+                # Downgrade: state was also stationary → REVIEW instead of EXCLUDE
+                regions_desc = ", ".join(
+                    f"{r['feature']}@{r['duration_sec']}s(f{r['parquet_start']}-{r['parquet_end']})"
+                    for r in hard
+                )
+                return MetricResult.make_review(
+                    name=self.name,
+                    measurement={
+                        "score_compat": 0.5,
+                        "checked_features": checked,
+                        "freeze_region_count": len(freeze_regions),
+                        "total_frozen_sec": round(total_frozen_sec, 3),
+                        "state_cross_validated_segments": state_cross_validated_segments,
+                    },
+                    reason="state_also_stationary",
+                    message=(
+                        f"Video freeze detected ({len(freeze_regions)} region(s), "
+                        f"{total_frozen_sec:.1f}s total: {regions_desc}), but state "
+                        f"data was also stationary — likely whole-system idle, not "
+                        f"camera drop-out. Downgraded to REVIEW."
+                    ),
+                    details=details,
+                    severity="low",
+                )
+
             regions_desc = ", ".join(
                 f"{r['feature']}@{r['duration_sec']}s(f{r['parquet_start']}-{r['parquet_end']})"
                 for r in hard

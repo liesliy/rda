@@ -61,6 +61,10 @@ class DatasetAuditResult:
         }
         if self.dataset_summary is not None:
             d["dataset_summary"] = self.dataset_summary.to_dict().get("dataset_summary", {})
+        # T-12: surface action_unit in dataset_summary
+        if hasattr(self, "dataset_info") and self.dataset_info is not None:
+            action_unit = self.dataset_info.meta.get("action_unit", "unknown")
+            d.setdefault("dataset_summary", {})["action_unit"] = action_unit
         return d
 
 
@@ -75,6 +79,8 @@ class DatasetAuditor:
             :class:`~rda.calibration.BehavioralScorer` is automatically
             created and passed to the EpisodeAuditor.
         execution_tier: Execution tier controlling which metrics to run (v0.9.4).
+        metric_kwargs: Optional mapping from metric name to extra constructor
+            keyword arguments (v0.9.14).
     """
 
     def __init__(
@@ -82,6 +88,7 @@ class DatasetAuditor:
         episode_auditor: Optional[EpisodeAuditor] = None,
         reference: Optional[ReferenceProfile] = None,
         execution_tier: Optional[Any] = None,
+        metric_kwargs: Optional[dict] = None,
     ) -> None:
         """Initialize the dataset auditor.
 
@@ -92,6 +99,8 @@ class DatasetAuditor:
                 When provided and episode_auditor is None, a BehavioralScorer
                 is automatically created and injected into the EpisodeAuditor.
             execution_tier: Execution tier for filtering metrics (v0.9.4).
+            metric_kwargs: Optional mapping from metric name to extra
+                constructor keyword arguments (v0.9.14).
         """
         self.execution_tier = execution_tier
         if episode_auditor is not None:
@@ -99,9 +108,15 @@ class DatasetAuditor:
         elif reference is not None:
             from rda.calibration.scorer import BehavioralScorer
             scorer = BehavioralScorer(reference)
-            self.episode_auditor = EpisodeAuditor(scorer=scorer, execution_tier=execution_tier)
+            self.episode_auditor = EpisodeAuditor(
+                scorer=scorer, execution_tier=execution_tier,
+                metric_kwargs=metric_kwargs,
+            )
         else:
-            self.episode_auditor = EpisodeAuditor(execution_tier=execution_tier)
+            self.episode_auditor = EpisodeAuditor(
+                execution_tier=execution_tier,
+                metric_kwargs=metric_kwargs,
+            )
 
     def audit_dataset(
         self,

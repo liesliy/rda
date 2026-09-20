@@ -176,6 +176,95 @@ def _extract_declared_features_from_info(info):
     return declared if declared else None
 
 
+def _infer_action_unit(info: dict, action_sample: Optional[np.ndarray] = None) -> str:
+    """Infer the physical unit type of action data.
+
+    Priority order:
+      1. Explicit declaration in ``meta/info.json`` features.action.action_unit.
+      2. Feature naming suffix (e.g. .pos/.deg → degrees, .rad → radians).
+      3. Value-range statistics from a sampled action array.
+      4. Multi-signal disagreement → "mixed".
+      5. No signal at all → "unknown".
+
+    Args:
+        info: Parsed ``meta/info.json`` dict.
+        action_sample: Optional 2-D numpy array (frames × dims) of action
+            values used for value-range inference.  May be ``None`` when
+            no action data is available.
+
+    Returns:
+        One of ``"degrees"``, ``"radians"``, ``"normalized"``,
+        ``"raw_steps"``, ``"mixed"``, or ``"unknown"``.
+    """
+    # --- Priority 1: explicit declaration ---
+    features = info.get("features", {})
+    for key, spec in features.items():
+        if not isinstance(spec, dict):
+            continue
+        if key == "action" or key.startswith("action."):
+            explicit = spec.get("action_unit")
+            if explicit and isinstance(explicit, str):
+                return explicit
+
+    # --- Priority 2: feature naming suffix ---
+    _SUFFIX_MAP = {
+        ".pos": "degrees", ".deg": "degrees", ".degree": "degrees",
+        ".degrees": "degrees",
+        ".rad": "radians", ".radians": "radians",
+        ".norm": "normalized", ".normalized": "normalized",
+        ".step": "raw_steps", ".raw": "raw_steps",
+    }
+    suffix_label: Optional[str] = None
+    for key in features:
+        if key == "action" or key.startswith("action."):
+            lower_key = key.lower()
+            for suffix, label in _SUFFIX_MAP.items():
+                if lower_key.endswith(suffix):
+                    suffix_label = label
+                    break
+            if suffix_label is not None:
+                break
+
+    # --- Priority 3: value-range statistics (global conditions) ---
+    range_label: Optional[str] = None
+    if action_sample is not None and action_sample.size > 0:
+        try:
+            sample = np.asarray(action_sample, dtype=np.float64)
+            if sample.ndim == 1:
+                sample = sample.reshape(-1, 1)
+            finite_sample = sample[np.isfinite(sample)]
+            if finite_sample.size > 0:
+                col_min = np.nanmin(sample, axis=0)
+                col_max = np.nanmax(sample, axis=0)
+                global_min = float(np.nanmin(col_min))
+                global_max = float(np.nanmax(col_max))
+                abs_max = float(np.nanmax(np.abs(finite_sample)))
+
+                # Global conditions checked in priority order
+                if global_max <= 1.01 and global_min >= -1.01:
+                    range_label = "normalized"
+                elif abs_max > 360 and global_max > 2000:
+                    range_label = "raw_steps"
+                elif global_max > 6.3 and global_max <= 200:
+                    range_label = "degrees"
+                elif global_max <= 6.5:
+                    range_label = "radians"
+                else:
+                    range_label = "unknown"
+        except Exception:
+            pass  # Defensive: any error → skip range inference
+
+    # --- Combine signals ---
+    sources = [s for s in [suffix_label, range_label] if s is not None]
+    if not sources:
+        return "unknown"
+    unique = set(sources)
+    if len(unique) == 1:
+        return unique.pop()
+    # Disagreement between suffix and range → mixed
+    return "mixed"
+
+
 def _get_feature_keys(info: dict) -> tuple:
     """Extract modality and action keys from info.json features dict."""
     features = info.get("features", {})
@@ -886,6 +975,24 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
                     total_frames = first.num_frames * num_episodes if first else 0
             except Exception:
                 pass
+
+        # T-12: Infer action_unit from info.json + action sample
+        action_sample = None
+        try:
+            first_ep = next(iter_episodes(path, max_episodes=1), None)
+            if first_ep and first_ep.action:
+                # Collect the primary action array for sampling
+                for pref_key in ("action", "joint_pos", "position"):
+                    if pref_key in first_ep.action:
+                        action_sample = first_ep.action[pref_key]
+                        break
+                if action_sample is None:
+                    # Take first available action array
+                    action_sample = next(iter(first_ep.action.values()), None)
+        except Exception:
+            pass  # Defensive: any error → action_sample stays None
+
+        meta["action_unit"] = _infer_action_unit(info, action_sample)
 
         return DatasetInfo(
             path=path,

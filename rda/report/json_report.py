@@ -70,6 +70,21 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
     }
 
 
+def _build_dataset_summary_with_action_unit(result: DatasetAuditResult) -> Dict[str, Any]:
+    """Build dataset_summary dict, injecting action_unit from DatasetInfo.meta.
+
+    T-12: action_unit is inferred at loader time and stored in
+    ``dataset_info.meta["action_unit"]``.  This helper surfaces it
+    inside the ``dataset_summary`` block of the JSON report.
+    """
+    summary_dict: Dict[str, Any] = {}
+    if result.dataset_summary is not None:
+        summary_dict = result.dataset_summary.to_dict().get("dataset_summary", {})
+    action_unit = result.dataset_info.meta.get("action_unit", "unknown") if result.dataset_info else "unknown"
+    summary_dict["action_unit"] = action_unit
+    return summary_dict
+
+
 def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
     """Generate the full JSON report structure (engine format).
 
@@ -147,11 +162,7 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
         # D-17 (v0.9.4): execution tier and video quality metadata
         "video_quality": video_quality_section,
         # v0.9: Dataset Summary — aggregated statistics across all episodes
-        "dataset_summary": (
-            result.dataset_summary.to_dict().get("dataset_summary", {})
-            if result.dataset_summary is not None
-            else {}
-        ),
+        "dataset_summary": _build_dataset_summary_with_action_unit(result),
         "hero_metrics": hero_metrics,
         "top_observations": top_obs,
         # REQ-11 (v0.7.1): metrics that could not run because an optional
