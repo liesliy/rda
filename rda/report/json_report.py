@@ -30,6 +30,20 @@ from rda.report.top_issues import compute_top_observations, compute_hero_metrics
 from rda.report.acceptance import build_acceptance_summary
 
 
+class _NumpySafeEncoder(json.JSONEncoder):
+    """JSON encoder that safely converts numpy types to native Python types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return str(obj)
+
+
 # ---------------------------------------------------------------------------
 # Engine-format: three-layer JSON report (backward compatible)
 # ---------------------------------------------------------------------------
@@ -218,7 +232,7 @@ def format_json_report(result: DatasetAuditResult, indent: int = 2) -> str:
         JSON string.
     """
     report = generate_json_report(result)
-    return json.dumps(report, indent=indent, ensure_ascii=False, default=str)
+    return json.dumps(report, indent=indent, ensure_ascii=False, cls=_NumpySafeEncoder)
 
 
 def save_json_report(result: DatasetAuditResult, path: str, indent: int = 2) -> None:

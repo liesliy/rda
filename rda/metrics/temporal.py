@@ -121,9 +121,9 @@ class TimestampValidityMetric(MetricBase):
         }
 
         if ts is None or ts.size < 2:
-            return MetricResult.make_pass(
+            return MetricResult.make_na(
                 name=self.name,
-                measurement={"score_compat": 1.0, "num_timestamps": ts.size if ts is not None else 0},
+                reason="insufficient_timestamps",
                 message="Fewer than 2 timestamps — nothing to validate.",
                 details=details,
             )

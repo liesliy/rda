@@ -149,6 +149,15 @@ class VisualQualityMetric(MetricBase):
                 root / "videos" / feature
                 / f"chunk-{int(chunk):03d}" / f"file-{int(file_idx):03d}.mp4"
             )
+            # Fallback to v2.1 format: videos/chunk-XXX/<feature>/episode_XXXXXX.mp4
+            if not video_path.exists():
+                ep_index = info.get("episode_index")
+                if ep_index is not None:
+                    video_path = (
+                        root / "videos"
+                        / f"chunk-{int(chunk):03d}" / feature
+                        / f"episode_{int(ep_index):06d}.mp4"
+                    )
             if not video_path.exists():
                 continue
 

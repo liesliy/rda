@@ -291,14 +291,6 @@ class JointLimitMetric(MetricBase):
                 details=details,
             )
 
-        if not isinstance(state_arr, np.ndarray) or state_arr.ndim < 2:
-            return MetricResult.make_na(
-                name=self.name,
-                reason="state_array_invalid_shape",
-                message="observation.state has invalid shape; skipping check.",
-                details=details,
-            )
-
         n_frames, n_joints_state = state_arr.shape
         n_joints_limits = len(limits)
         n_checked = min(n_joints_state, n_joints_limits)

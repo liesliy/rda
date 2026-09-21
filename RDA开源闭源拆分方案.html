@@ -1,0 +1,1004 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RDA 开源/闭源模块拆分方案 — 路径 B 实施指南</title>
+<style>
+:root {
+  --color-canvas: oklch(98% 0.005 250);
+  --color-surface: oklch(95.5% 0.008 250);
+  --color-surface-raised: oklch(99% 0.003 250);
+  --color-ink: oklch(22% 0.02 258);
+  --color-muted: oklch(48% 0.018 257);
+  --color-rule: oklch(87% 0.012 255);
+  --color-signal: oklch(55% 0.20 256);
+  --color-open: oklch(52% 0.17 155);
+  --color-open-bg: oklch(96% 0.03 155);
+  --color-closed: oklch(58% 0.18 32);
+  --color-closed-bg: oklch(96% 0.03 32);
+  --color-conditional: oklch(58% 0.16 85);
+  --color-conditional-bg: oklch(96% 0.03 85);
+  --font-display: system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  --font-body: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 3vw, 2rem);
+}
+
+/* Typography */
+h1 {
+  font-family: var(--font-display);
+  font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-sm);
+  color: var(--color-ink);
+}
+
+h2 {
+  font-family: var(--font-display);
+  font-size: clamp(1.15rem, 2.5vw, 1.45rem);
+  font-weight: 650;
+  line-height: 1.3;
+  margin: var(--space-2xl) 0 var(--space-lg);
+  padding-bottom: var(--space-sm);
+  border-bottom: 2px solid var(--color-rule);
+  color: var(--color-ink);
+}
+
+h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: var(--space-lg) 0 var(--space-sm);
+  color: var(--color-ink);
+}
+
+p { margin: 0 0 var(--space-md); }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--color-surface);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-rule);
+}
+
+/* Opening */
+.opening {
+  margin-bottom: var(--space-2xl);
+}
+
+.opening .subtitle {
+  font-size: 1.05rem;
+  color: var(--color-muted);
+  margin-bottom: var(--space-lg);
+}
+
+.recommendation-box {
+  background: var(--color-surface);
+  border: 1px solid var(--color-rule);
+  border-left: 4px solid var(--color-signal);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  margin: var(--space-lg) 0;
+}
+
+.recommendation-box .label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-signal);
+  margin-bottom: var(--space-xs);
+}
+
+.recommendation-box p {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+/* Legend */
+.legend {
+  display: flex;
+  gap: var(--space-lg);
+  flex-wrap: wrap;
+  margin: var(--space-lg) 0 var(--space-xl);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-rule);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.88rem;
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-dot.open { background: var(--color-open); }
+.legend-dot.closed { background: var(--color-closed); }
+.legend-dot.conditional { background: var(--color-conditional); }
+
+/* Architecture Diagram */
+.arch-diagram {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl) var(--space-lg);
+  margin: var(--space-xl) 0;
+  overflow-x: auto;
+}
+
+.arch-layers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-width: 600px;
+}
+
+.arch-layer {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-md);
+}
+
+.arch-layer-label {
+  width: 100px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted);
+  text-align: center;
+  border-right: 2px solid var(--color-rule);
+  padding-right: var(--space-md);
+}
+
+.arch-modules {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  flex: 1;
+  align-items: center;
+}
+
+.arch-module {
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  border: 1.5px solid;
+  white-space: nowrap;
+}
+
+.arch-module.open {
+  background: var(--color-open-bg);
+  border-color: var(--color-open);
+  color: oklch(35% 0.12 155);
+}
+
+.arch-module.closed {
+  background: var(--color-closed-bg);
+  border-color: var(--color-closed);
+  color: oklch(38% 0.12 32);
+}
+
+.arch-module.conditional {
+  background: var(--color-conditional-bg);
+  border-color: var(--color-conditional);
+  color: oklch(38% 0.12 85);
+}
+
+/* Module Detail Cards */
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--space-lg);
+  margin: var(--space-lg) 0;
+}
+
+.module-card {
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface-raised);
+}
+
+.module-card-header {
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.module-card-header.open { border-left: 4px solid var(--color-open); }
+.module-card-header.closed { border-left: 4px solid var(--color-closed); }
+.module-card-header.conditional { border-left: 4px solid var(--color-conditional); }
+
+.module-card-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+}
+
+.module-tag {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2em 0.6em;
+  border-radius: var(--radius-sm);
+}
+
+.module-tag.open { background: var(--color-open-bg); color: oklch(35% 0.12 155); border: 1px solid var(--color-open); }
+.module-tag.closed { background: var(--color-closed-bg); color: oklch(38% 0.12 32); border: 1px solid var(--color-closed); }
+.module-tag.conditional { background: var(--color-conditional-bg); color: oklch(38% 0.12 85); border: 1px solid var(--color-conditional); }
+
+.module-card-body {
+  padding: var(--space-md) var(--space-lg);
+}
+
+.module-card-body p {
+  font-size: 0.9rem;
+  margin-bottom: var(--space-sm);
+  color: var(--color-ink);
+}
+
+.module-card-body .rationale {
+  font-size: 0.84rem;
+  color: var(--color-muted);
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px dashed var(--color-rule);
+}
+
+.module-file-list {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  margin: var(--space-sm) 0;
+  line-height: 1.8;
+}
+
+/* Decision Matrix Table */
+.matrix-table-wrap {
+  overflow-x: auto;
+  margin: var(--space-lg) 0;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+}
+
+table.matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+table.matrix-table th {
+  background: var(--color-surface);
+  font-weight: 600;
+  text-align: left;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 2px solid var(--color-rule);
+  white-space: nowrap;
+}
+
+table.matrix-table td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-rule);
+  vertical-align: top;
+}
+
+table.matrix-table tr:last-child td { border-bottom: none; }
+
+table.matrix-table td.mono {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+
+/* Inline status badges */
+.badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15em 0.5em;
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+}
+
+.badge.open { background: var(--color-open-bg); color: oklch(35% 0.12 155); }
+.badge.closed { background: var(--color-closed-bg); color: oklch(38% 0.12 32); }
+.badge.conditional { background: var(--color-conditional-bg); color: oklch(38% 0.12 85); }
+
+/* Implementation Steps */
+.impl-steps {
+  counter-reset: step;
+  margin: var(--space-lg) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.impl-steps li {
+  counter-increment: step;
+  position: relative;
+  padding: var(--space-md) var(--space-lg) var(--space-md) 3.5rem;
+  margin-bottom: var(--space-sm);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-rule);
+}
+
+.impl-steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: var(--space-md);
+  top: var(--space-md);
+  width: 1.8rem;
+  height: 1.8rem;
+  background: var(--color-signal);
+  color: white;
+  font-weight: 700;
+  font-size: 0.82rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.impl-steps li strong {
+  display: block;
+  margin-bottom: var(--space-xs);
+}
+
+.impl-steps li p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* Risk table */
+.risk-list {
+  margin: var(--space-lg) 0;
+}
+
+.risk-item {
+  padding: var(--space-md);
+  margin-bottom: var(--space-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-rule);
+  background: var(--color-surface);
+}
+
+.risk-item .risk-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: var(--space-xs);
+}
+
+.risk-item .risk-body {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+
+/* Timeline */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin: var(--space-lg) 0;
+}
+
+.timeline-phase {
+  display: flex;
+  gap: var(--space-lg);
+  align-items: flex-start;
+}
+
+.timeline-marker {
+  flex-shrink: 0;
+  width: 80px;
+  text-align: center;
+}
+
+.timeline-marker .phase-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-signal);
+}
+
+.timeline-marker .phase-time {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+}
+
+.timeline-content {
+  flex: 1;
+  padding: var(--space-md);
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-rule);
+}
+
+.timeline-content h4 {
+  margin: 0 0 var(--space-sm);
+  font-size: 0.95rem;
+}
+
+.timeline-content ul {
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: 0.88rem;
+}
+
+.timeline-content li { margin-bottom: var(--space-xs); }
+
+/* Footer */
+footer {
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-rule);
+  font-size: 0.82rem;
+  color: var(--color-muted);
+}
+
+/* Responsive */
+@media (max-width: 720px) {
+  .module-grid { grid-template-columns: 1fr; }
+  .arch-layer { flex-direction: column; }
+  .arch-layer-label {
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--color-rule);
+    padding-right: 0;
+    padding-bottom: var(--space-sm);
+    justify-content: flex-start;
+  }
+  .timeline-phase { flex-direction: column; }
+  .timeline-marker { width: auto; text-align: left; display: flex; gap: var(--space-sm); }
+}
+
+@media print {
+  body { background: white; }
+  .page { max-width: none; padding: 1cm; }
+  .arch-diagram { break-inside: avoid; }
+  .module-card { break-inside: avoid; }
+  h2 { break-after: avoid; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+
+<!-- Opening -->
+<header class="opening">
+  <h1>RDA 开源/闭源模块拆分方案</h1>
+  <p class="subtitle">路径 B：开源指标层 + 闭源推荐引擎 · 实施指南</p>
+
+  <div class="recommendation-box">
+    <div class="label">推荐策略</div>
+    <p>将 RDA 拆分为<strong>开源核心</strong>（基础审计指标 + LeRobot 适配 + 报告模板）和<strong>商业版</strong>（模型感知推荐引擎 + 置信度规则 + 安全边界 + 批量处理/API）。开源部分进 LeRobot/HF 社区拿流量和信任，闭源部分作为付费产品的核心壁垒。</p>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="legend-dot open"></span> 开源 — 公开源码，社区可用</div>
+    <div class="legend-item"><span class="legend-dot closed"></span> 闭源 — 仅商业版包含</div>
+    <div class="legend-item"><span class="legend-dot conditional"></span> 条件性 — 视验证结果决定</div>
+  </div>
+</header>
+
+<!-- Architecture Overview -->
+<section>
+  <h2>架构分层总览</h2>
+
+  <div class="arch-diagram">
+    <svg viewBox="0 0 800 340" role="img" aria-labelledby="arch-title arch-desc" style="width:100%;height:auto;">
+      <title id="arch-title">RDA 模块架构分层图</title>
+      <desc id="arch-desc">展示 RDA 各模块的开源/闭源分布，分为用户接口层、分析核心层、推荐引擎层和数据适配层</desc>
+
+      <!-- Layer labels -->
+      <text x="20" y="30" font-size="11" fill="oklch(48% 0.018 257)" font-weight="600" letter-spacing="0.05em" font-family="system-ui">用户接口层</text>
+      <text x="20" y="120" font-size="11" fill="oklch(48% 0.018 257)" font-weight="600" letter-spacing="0.05em" font-family="system-ui">分析核心层</text>
+      <text x="20" y="210" font-size="11" fill="oklch(48% 0.018 257)" font-weight="600" letter-spacing="0.05em" font-family="system-ui">推荐引擎层</text>
+      <text x="20" y="300" font-size="11" fill="oklch(48% 0.018 257)" font-weight="600" letter-spacing="0.05em" font-family="system-ui">数据适配层</text>
+
+      <!-- Separator lines -->
+      <line x1="20" y1="55" x2="780" y2="55" stroke="oklch(87% 0.012 255)" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="20" y1="155" x2="780" y2="155" stroke="oklch(87% 0.012 255)" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="20" y1="245" x2="780" y2="245" stroke="oklch(87% 0.012 255)" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- User Interface Layer -->
+      <rect x="140" y="10" width="130" height="36" rx="6" fill="oklch(96% 0.03 155)" stroke="oklch(52% 0.17 155)" stroke-width="1.5"/>
+      <text x="205" y="33" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(35% 0.12 155)">rda/cli</text>
+
+      <rect x="290" y="10" width="150" height="36" rx="6" fill="oklch(96% 0.03 85)" stroke="oklch(58% 0.16 85)" stroke-width="1.5"/>
+      <text x="365" y="33" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(38% 0.12 85)">rda/ui_app</text>
+
+      <rect x="460" y="10" width="140" height="36" rx="6" fill="oklch(96% 0.03 32)" stroke="oklch(58% 0.18 32)" stroke-width="1.5"/>
+      <text x="530" y="33" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(38% 0.12 32)">rda/recommend</text>
+
+      <!-- Analysis Core Layer -->
+      <rect x="140" y="70" width="130" height="36" rx="6" fill="oklch(96% 0.03 155)" stroke="oklch(52% 0.17 155)" stroke-width="1.5"/>
+      <text x="205" y="93" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(35% 0.12 155)">rda/audit</text>
+
+      <rect x="290" y="70" width="130" height="36" rx="6" fill="oklch(96% 0.03 155)" stroke="oklch(52% 0.17 155)" stroke-width="1.5"/>
+      <text x="355" y="93" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(35% 0.12 155)">rda/metrics</text>
+
+      <rect x="440" y="70" width="130" height="36" rx="6" fill="oklch(96% 0.03 155)" stroke="oklch(52% 0.17 155)" stroke-width="1.5"/>
+      <text x="505" y="93" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(35% 0.12 155)">rda/report</text>
+
+      <rect x="590" y="70" width="150" height="36" rx="6" fill="oklch(96% 0.03 85)" stroke="oklch(58% 0.16 85)" stroke-width="1.5"/>
+      <text x="665" y="93" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(38% 0.12 85)">rda/calibration</text>
+
+      <!-- Recommendation Engine Layer (fully closed) -->
+      <rect x="140" y="165" width="200" height="56" rx="6" fill="oklch(96% 0.03 32)" stroke="oklch(58% 0.18 32)" stroke-width="2"/>
+      <text x="240" y="188" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(38% 0.12 32)">engine.py</text>
+      <text x="240" y="208" text-anchor="middle" font-size="10" fill="oklch(48% 0.08 32)">规则引擎 + 置信度 + 安全边界</text>
+
+      <rect x="360" y="165" width="200" height="56" rx="6" fill="oklch(96% 0.03 32)" stroke="oklch(58% 0.18 32)" stroke-width="2"/>
+      <text x="460" y="188" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(38% 0.12 32)">temporal_metrics.py</text>
+      <text x="460" y="208" text-anchor="middle" font-size="10" fill="oklch(48% 0.08 32)">temporal sufficiency 计算</text>
+
+      <rect x="580" y="165" width="160" height="56" rx="6" fill="oklch(96% 0.03 32)" stroke="oklch(58% 0.18 32)" stroke-width="2"/>
+      <text x="660" y="188" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(38% 0.12 32)">rda/export</text>
+      <text x="660" y="208" text-anchor="middle" font-size="10" fill="oklch(48% 0.08 32)">clean dataset export</text>
+
+      <!-- Data Adapter Layer -->
+      <rect x="140" y="260" width="150" height="36" rx="6" fill="oklch(96% 0.03 155)" stroke="oklch(52% 0.17 155)" stroke-width="1.5"/>
+      <text x="215" y="283" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(35% 0.12 155)">rda/io</text>
+
+      <rect x="310" y="260" width="150" height="36" rx="6" fill="oklch(96% 0.03 155)" stroke="oklch(52% 0.17 155)" stroke-width="1.5"/>
+      <text x="385" y="283" text-anchor="middle" font-size="12" font-family="ui-monospace,monospace" fill="oklch(35% 0.12 155)">rda/io/schema</text>
+    </svg>
+  </div>
+</section>
+
+<!-- Module Detail -->
+<section>
+  <h2>模块拆分明细</h2>
+
+  <div class="module-grid">
+
+    <!-- OPEN modules -->
+    <div class="module-card">
+      <div class="module-card-header open">
+        <h3>rda/metrics</h3>
+        <span class="module-tag open">开源</span>
+      </div>
+      <div class="module-card-body">
+        <p>基础指标计算：idle_ratio、spike_count、effective_motion_ratio、duration、distribution、integrity 等。</p>
+        <div class="module-file-list">
+          base.py · distribution.py · integrity.py · motion.py · temporal.py
+        </div>
+        <p class="rationale"><strong>开源理由：</strong>这些是 Tier-1 universal metrics，定义已在技术文档中公开。开源后社区可验证和复现，建立信任。竞品（Calibra）已开源类似能力，不开源反而显得刻意隐藏。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header open">
+        <h3>rda/audit</h3>
+        <span class="module-tag open">开源</span>
+      </div>
+      <div class="module-card-body">
+        <p>审计规则引擎：rules.py 定义 PASS/REVIEW/EXCLUDE 判定逻辑，episode_audit.py 和 dataset_audit.py 执行逐层审计。</p>
+        <div class="module-file-list">
+          rules.py · episode_audit.py · dataset_audit.py
+        </div>
+        <p class="rationale"><strong>开源理由：</strong>审计是 RDA 的基础能力，规则逻辑透明有助于社区信任。这部分壁垒不高，但开源后能成为 LeRobot 生态的"标准审计工具"。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header open">
+        <h3>rda/io</h3>
+        <span class="module-tag open">开源</span>
+      </div>
+      <div class="module-card-body">
+        <p>数据加载与格式适配：LeRobot v2.1/v3.0 格式读写、自动格式检测、EpisodeData schema。</p>
+        <div class="module-file-list">
+          lerobot_loader.py · schema.py
+        </div>
+        <p class="rationale"><strong>开源理由：</strong>LeRobot 格式适配是社区贡献的基础设施。开源后可获得社区维护和扩展（如新格式支持），降低自身维护成本。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header open">
+        <h3>rda/report</h3>
+        <span class="module-tag open">开源</span>
+      </div>
+      <div class="module-card-body">
+        <p>报告生成：聚合统计、JSON 报告、摘要、top issues 排序、audit history。</p>
+        <div class="module-file-list">
+          aggregation.py · json_report.py · summary.py · top_issues.py · audit_history.py
+        </div>
+        <p class="rationale"><strong>开源理由：</strong>报告模板是展示审计结果的工具，开源可让社区自定义报告格式，增加工具粘性。不包含推荐逻辑。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header open">
+        <h3>rda/cli</h3>
+        <span class="module-tag open">开源</span>
+      </div>
+      <div class="module-card-body">
+        <p>命令行接口：提供 <code>rda audit</code> 命令的入口和参数解析。</p>
+        <div class="module-file-list">
+          main.py
+        </div>
+        <p class="rationale"><strong>开源理由：</strong>开源版只暴露 <code>rda audit</code> 命令，不含 <code>rda recommend</code>。CLI 是社区使用的入口，必须公开。</p>
+      </div>
+    </div>
+
+    <!-- CLOSED modules -->
+    <div class="module-card">
+      <div class="module-card-header closed">
+        <h3>rda/recommend/engine.py</h3>
+        <span class="module-tag closed">闭源</span>
+      </div>
+      <div class="module-card-body">
+        <p>推荐规则引擎核心：模型类型感知分支（frame_wise vs temporal）、置信度等级（HIGH/EXPERIMENTAL/NOT_RECOMMENDED）、安全边界约束、Recommendation 数据结构。</p>
+        <div class="module-file-list">
+          RecommendationAction · ConfidenceLevel · TargetPolicy · _apply_rules()
+        </div>
+        <p class="rationale"><strong>闭源理由：</strong>这是 RDA 的核心差异化。模型类型感知 + 置信度规则 + 安全边界是竞品没有的能力。一旦公开，两周内可被复制。必须保留为商业版核心。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header closed">
+        <h3>rda/recommend/temporal_metrics.py</h3>
+        <span class="module-tag closed">闭源</span>
+      </div>
+      <div class="module-card-body">
+        <p>Temporal sufficiency 完整计算：idle/active 分割、active_run 分布、valid_window_ratio、transition 密度、bimodal_gap 阈值检测。</p>
+        <div class="module-file-list">
+          TemporalSufficiency · DatasetTemporalSufficiency · _find_bimodal_threshold()
+        </div>
+        <p class="rationale"><strong>闭源理由：</strong>虽然指标本身是"观测性"的，但完整的 temporal sufficiency 框架是 recommend 引擎的数据基础。如果开源这部分，等于开源了 recommend 的输入管线，壁垒大幅降低。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header closed">
+        <h3>rda/export</h3>
+        <span class="module-tag closed">闭源</span>
+      </div>
+      <div class="module-card-body">
+        <p>清洁数据集导出：基于审计结论自动裁剪 bad episodes，支持 conservative/aggressive 策略，自动重写 meta/info.json。</p>
+        <div class="module-file-list">
+          clean_export.py
+        </div>
+        <p class="rationale"><strong>闭源理由：</strong>export 是"审计→行动"闭环的关键一步。开源版只给诊断结果，商业版给出可执行的导出方案。这也是付费转化的关键功能点。</p>
+      </div>
+    </div>
+
+    <!-- CONDITIONAL modules -->
+    <div class="module-card">
+      <div class="module-card-header conditional">
+        <h3>rda/calibration</h3>
+        <span class="module-tag conditional">条件性</span>
+      </div>
+      <div class="module-card-body">
+        <p>Reference calibration + PCA behavioral scoring：参考数据集校准、MAD-based z-score、PCA  composite deviation score。</p>
+        <div class="module-file-list">
+          reference.py · scorer.py · normalization.py · portable.py
+        </div>
+        <p class="rationale"><strong>条件性理由：</strong>calibration 有学术价值（可发论文），但如果企业客户愿意为"跨数据集比较"付费，则应保留为商业版功能。建议：先闭源验证付费意愿，若 3 个月内无企业客户关注此功能，可开源指标层（reference.py）保留 scorer.py。</p>
+      </div>
+    </div>
+
+    <div class="module-card">
+      <div class="module-card-header conditional">
+        <h3>rda/ui_app</h3>
+        <span class="module-tag conditional">条件性</span>
+      </div>
+      <div class="module-card-body">
+        <p>Streamlit Web UI：上传数据集、查看审计结果、episode 浏览器、健康概览、导出操作。</p>
+        <div class="module-file-list">
+          app.py · pages/1_Upload.py · pages/2_Audit.py · ...
+        </div>
+        <p class="rationale"><strong>条件性理由：</strong>UI 可以是很好的获客工具（降低使用门槛），但也可能是商业版的卖点（"托管 Web 服务"）。建议：开源一个最简版（只展示 audit 结果），完整功能（含 recommend 展示）保留为商业版/托管版。</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- Decision Matrix -->
+<section>
+  <h2>决策矩阵</h2>
+
+  <div class="matrix-table-wrap">
+    <table class="matrix-table">
+      <caption style="font-size:0.85rem;color:var(--color-muted);padding:var(--space-sm) var(--space-md);text-align:left;">各模块在开源/闭源维度的关键属性对比</caption>
+      <thead>
+        <tr>
+          <th scope="col">模块</th>
+          <th scope="col">决策</th>
+          <th scope="col">代码量</th>
+          <th scope="col">竞争壁垒</th>
+          <th scope="col">社区价值</th>
+          <th scope="col">付费驱动力</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">rda/metrics</td>
+          <td><span class="badge open">开源</span></td>
+          <td>~800 行</td>
+          <td>低</td>
+          <td>高</td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/audit</td>
+          <td><span class="badge open">开源</span></td>
+          <td>~600 行</td>
+          <td>低</td>
+          <td>高</td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/io</td>
+          <td><span class="badge open">开源</span></td>
+          <td>~400 行</td>
+          <td>低</td>
+          <td>极高</td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/report</td>
+          <td><span class="badge open">开源</span></td>
+          <td>~500 行</td>
+          <td>低</td>
+          <td>中</td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/cli</td>
+          <td><span class="badge open">开源</span></td>
+          <td>~300 行</td>
+          <td>低</td>
+          <td>高</td>
+          <td>低</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/recommend/engine</td>
+          <td><span class="badge closed">闭源</span></td>
+          <td>~560 行</td>
+          <td>极高</td>
+          <td>低</td>
+          <td>极高</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/recommend/temporal</td>
+          <td><span class="badge closed">闭源</span></td>
+          <td>~480 行</td>
+          <td>高</td>
+          <td>低</td>
+          <td>高</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/export</td>
+          <td><span class="badge closed">闭源</span></td>
+          <td>~490 行</td>
+          <td>中</td>
+          <td>中</td>
+          <td>高</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/calibration</td>
+          <td><span class="badge conditional">条件性</span></td>
+          <td>~450 行</td>
+          <td>中高</td>
+          <td>高</td>
+          <td>中</td>
+        </tr>
+        <tr>
+          <td class="mono">rda/ui_app</td>
+          <td><span class="badge conditional">条件性</span></td>
+          <td>~500 行</td>
+          <td>低</td>
+          <td>高</td>
+          <td>中</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Implementation Plan -->
+<section>
+  <h2>代码拆分实施步骤</h2>
+
+  <ol class="impl-steps">
+    <li>
+      <strong>创建双包结构</strong>
+      <p>将当前 <code>robot-data-audit</code> 仓库拆分为两个 Python 包：<code>rda-core</code>（开源，PyPI 发布）和 <code>rda-pro</code>（闭源，私有 PyPI 或直接分发）。rda-core 依赖 rda-pro 不存在的模块通过 try/except 降级处理。</p>
+    </li>
+    <li>
+      <strong>拆分 rda/recommend/ 目录</strong>
+      <p>将 <code>rda/recommend/</code> 整个目录从开源仓库移到闭源包。开源版 CLI 中 <code>rda recommend</code> 命令改为打印提示："推荐引擎为商业版功能，请安装 rda-pro"。保留 <code>rda/recommend/__init__.py</code> 的空壳以不破坏 import。</p>
+    </li>
+    <li>
+      <strong>拆分 rda/export/ 目录</strong>
+      <p>同理将 <code>rda/export/</code> 移入闭源包。开源版只输出审计报告（诊断），不提供自动裁剪导出（行动）。</p>
+    </li>
+    <li>
+      <strong>处理 rda/calibration/ 依赖</strong>
+      <p>calibration 被 recommend 引擎依赖。方案：将 calibration 中的 <code>normalization.py</code> 和 <code>portable.py</code> 保留在开源版（基础指标标准化），<code>reference.py</code> 和 <code>scorer.py</code>（PCA scoring）移入闭源包。</p>
+    </li>
+    <li>
+      <strong>调整 CI/CD 和 PyPI 发布</strong>
+      <p>开源版继续用 GitHub Actions 发布到公共 PyPI（包名 <code>robot-data-audit</code>）。闭源版使用私有 PyPI 或 GitHub Releases + 手动安装。考虑使用 license key 或激活码机制。</p>
+    </li>
+    <li>
+      <strong>准备开源版 README 和文档</strong>
+      <p>开源版 README 突出：审计能力、LeRobot 兼容性、社区贡献指南。闭源版文档突出：recommend 引擎、模型感知推荐、企业级功能。</p>
+    </li>
+  </ol>
+</section>
+
+<!-- Risks -->
+<section>
+  <h2>风险与应对</h2>
+
+  <div class="risk-list">
+    <div class="risk-item">
+      <div class="risk-title">风险 1：开源后无人关注</div>
+      <p class="risk-body">开源版缺少 recommend 功能，可能被认为"只是个审计脚本"而无人问津。<br><strong>应对：</strong>配合 HF blog / LeRobot 社区帖子做推广，强调"开源审计 + 商业推荐"的分工。提供 demo 数据集和可视化报告截图吸引关注。</p>
+    </div>
+    <div class="risk-item">
+      <div class="risk-title">风险 2：闭源版获客困难</div>
+      <p class="risk-body">没有开源社区的信任基础，直接卖闭源产品难。<br><strong>应对：</strong>先用开源版积累 10-20 个真实用户，通过审计报告的价值建立信任后，再推荐升级到商业版获取 recommend 能力。</p>
+    </div>
+    <div class="risk-item">
+      <div class="risk-title">风险 3：拆分增加维护成本</div>
+      <p class="risk-body">两个包意味着两套版本、两套 CI、两套文档。<br><strong>应对：</strong>初期可以用 monorepo 结构（同一仓库、两个 setup.py），后续用户量起来后再物理拆分。当前阶段优先逻辑分离，不急于物理拆分。</p>
+    </div>
+    <div class="risk-item">
+      <div class="risk-title">风险 4：竞品快速跟进</div>
+      <p class="risk-body">Calibra 等开源项目可能快速加入类似 recommend 功能。<br><strong>应对：</strong>闭源版持续迭代实验数据和安全边界规则，建立"经过 N 个真实数据集验证"的信任壁垒。开源版保持指标层的社区领先地位。</p>
+    </div>
+  </div>
+</section>
+
+<!-- Timeline -->
+<section>
+  <h2>建议时间线</h2>
+
+  <div class="timeline">
+    <div class="timeline-phase">
+      <div class="timeline-marker">
+        <div class="phase-label">Phase 1</div>
+        <div class="phase-time">WRC 前</div>
+      </div>
+      <div class="timeline-content">
+        <h3>逻辑拆分 + 开源准备</h3>
+        <ul>
+          <li>在现有仓库中完成目录结构逻辑分离（不动 PyPI 发布）</li>
+          <li>选定 License（推荐 Apache 2.0）</li>
+          <li>补充 CONTRIBUTING.md + demo 数据集</li>
+          <li>代码扫描：移除凭证、硬编码路径</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="timeline-phase">
+      <div class="timeline-marker">
+        <div class="phase-label">Phase 2</div>
+        <div class="phase-time">WRC 期间</div>
+      </div>
+      <div class="timeline-content">
+        <h3>开源发布 + 社区推广</h3>
+        <ul>
+          <li>repo 从 private 改为 public</li>
+          <li>发布 HF blog + LeRobot 社区帖子</li>
+          <li>利用 WRC 热度做技术宣传</li>
+          <li>收集早期用户反馈</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="timeline-phase">
+      <div class="timeline-marker">
+        <div class="phase-label">Phase 3</div>
+        <div class="phase-time">1-3 个月</div>
+      </div>
+      <div class="timeline-content">
+        <h3>商业验证</h3>
+        <ul>
+          <li>用免费额度拉 10-30 个真实用户试用 recommend</li>
+          <li>验证：是否有人愿意付费？最卡的功能是什么？</li>
+          <li>评估 calibration 是否开源</li>
+          <li>根据反馈决定是否物理拆分双包</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="timeline-phase">
+      <div class="timeline-marker">
+        <div class="phase-label">Phase 4</div>
+        <div class="phase-time">3 个月后</div>
+      </div>
+      <div class="timeline-content">
+        <h3>规模化或调整</h3>
+        <ul>
+          <li>若企业客户为主 → 继续闭源 + 私有化部署</li>
+          <li>若社区声量重要 → 开源 calibration 指标层</li>
+          <li>若"没开源就没人信" → 开源一版可复现实验</li>
+          <li>根据数据决定是否提高定价或增加功能</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>RDA 开源/闭源模块拆分方案 · 基于路径 B（核心闭源 + 轻量开源）策略 · 2026-08-18</p>
+  <p>生成工具：Robot Data Audit v0.4.16 · 当前 PyPI 版本含完整 recommend 功能，待拆分后开源版将移除该模块</p>
+</footer>
+
+</main>
+
+<script>
+// Smooth scroll for internal anchors
+document.addEventListener('click', function(e) {
+  const link = e.target.closest('a[href^="#"]');
+  if (!link) return;
+  const target = document.querySelector(link.getAttribute('href'));
+  if (target) {
+    e.preventDefault();
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+});
+</script>
+</body>
+</html>

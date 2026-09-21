@@ -1118,7 +1118,7 @@ def iter_episodes(
                             v21_vf[feat_key]["from_timestamp"] = 0.0
                             v21_vf[feat_key]["to_timestamp"] = ep.num_frames / fps if fps else 0.0
                         ep.meta["video_features"] = v21_vf
-                        ep.meta["fps"] = fps
+                    ep.meta["fps"] = fps
                     yield ep
                 except Exception as e:
                     import warnings

@@ -23,9 +23,16 @@ from rda.io.schema import EpisodeData
 from rda.metrics.base import MetricBase, MetricResult
 
 
-# Tolerances (fraction of parquet frame count)
+# Tolerances (fraction of parquet frame count) — kept as defaults; profile overrides
 _SOFT_TOLERANCE = 0.01   # 1% — flag as review with explanation
 _HARD_TOLERANCE = 0.05   # 5% — flag as strong mismatch
+
+# Profile presets for video_frame_integrity (§4.12)
+_FRAME_INTEGRITY_PROFILES: Dict[str, Dict[str, float]] = {
+    "strict":  {"hard_threshold": 0.01, "soft_threshold": 0.005},
+    "default": {"hard_threshold": 0.05, "soft_threshold": 0.01},
+    "lenient": {"hard_threshold": 0.10, "soft_threshold": 0.05},
+}
 
 
 @lru_cache(maxsize=1024)
@@ -98,6 +105,25 @@ class VideoFrameIntegrityMetric(MetricBase):
         "Cross-check MP4 frame counts against parquet frame counts "
         "(Layer 1 integrity)."
     )
+
+    _VALID_PROFILES = ("strict", "default", "lenient")
+
+    def __init__(self, profile: str = "default") -> None:
+        """Initialise VideoFrameIntegrityMetric.
+
+        Args:
+            profile: Sensitivity preset. One of ``"strict"``, ``"default"`` (default),
+                or ``"lenient"``.
+
+        Raises:
+            ValueError: If *profile* is not one of the allowed values.
+        """
+        if profile not in self._VALID_PROFILES:
+            raise ValueError(
+                f"profile must be one of {self._VALID_PROFILES}, got {profile!r}"
+            )
+        self.profile = profile
+        self._profile_cfg = _FRAME_INTEGRITY_PROFILES[profile]
 
     def compute(self, episode: EpisodeData) -> MetricResult:
         meta = episode.meta or {}
@@ -220,10 +246,12 @@ class VideoFrameIntegrityMetric(MetricBase):
                 continue
 
             delta_ratio = abs(entry["delta"]) / max(episode.num_frames, 1)
-            if delta_ratio > _HARD_TOLERANCE:
+            hard_tol = self._profile_cfg["hard_threshold"]
+            soft_tol = self._profile_cfg["soft_threshold"]
+            if delta_ratio > hard_tol:
                 entry["level"] = "hard"
                 mismatched.append(entry)
-            elif delta_ratio > _SOFT_TOLERANCE:
+            elif delta_ratio > soft_tol:
                 entry["level"] = "soft"
                 mismatched.append(entry)
 
@@ -249,7 +277,7 @@ class VideoFrameIntegrityMetric(MetricBase):
             "checked": checked,
             "mismatched": mismatched,
             "unreadable_features": unreadable,
-            "tolerances": {"soft": _SOFT_TOLERANCE, "hard": _HARD_TOLERANCE},
+            "tolerances": {"soft": self._profile_cfg["soft_threshold"], "hard": self._profile_cfg["hard_threshold"], "profile": self.profile},
         }
 
         if not mismatched:
@@ -273,6 +301,7 @@ class VideoFrameIntegrityMetric(MetricBase):
         # Mismatch found — deterministic structural misalignment.
         worst = max(mismatched, key=lambda m: abs(m["delta"]))
         hard_count = sum(1 for m in mismatched if m["level"] == "hard")
+        soft_count = sum(1 for m in mismatched if m["level"] == "soft")
         parts = []
         for m in mismatched:
             if m.get("chunked") and m.get("file_truncated"):
@@ -290,6 +319,26 @@ class VideoFrameIntegrityMetric(MetricBase):
                     f"{m['feature']}: video={m['video_frames']} vs "
                     f"parquet={m['parquet_frames']} (delta {m['delta']:+d})"
                 )
+
+        # Soft-level mismatches → REVIEW; hard-level or truncated → EXCLUDE
+        if hard_count == 0 and soft_count > 0:
+            return MetricResult.make_review(
+                name=self.name,
+                measurement={
+                    "score_compat": 0.5,
+                    "checked_count": len(checked),
+                    "mismatch_count": soft_count,
+                },
+                reason=f"soft_mismatch ({soft_count} soft)",
+                message=(
+                    f"Video frame count mismatch in {soft_count} feature(s) within soft tolerance: "
+                    + "; ".join(parts)
+                    + f"; worst delta ratio {abs(worst['delta']) / max(episode.num_frames, 1):.1%}."
+                ),
+                details=details,
+                severity="low",
+            )
+
         msg = (
             f"Video frame count mismatch in {len(mismatched)} feature(s): "
             + "; ".join(parts)
@@ -299,7 +348,7 @@ class VideoFrameIntegrityMetric(MetricBase):
             name=self.name,
             reason=(
                 f"video_frame_mismatch ({hard_count} hard, "
-                f"{len(mismatched) - hard_count} soft)"
+                f"{soft_count} soft)"
             ),
             message=msg,
             details=details,

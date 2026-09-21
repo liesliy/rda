@@ -54,9 +54,28 @@ _FREEZE_CONCLUSIVE_RUNS = 3     # this many sustained spans → EXCLUDE
 _FREEZE_CONCLUSIVE_SECONDS = 3.0  # or one span longer than this
 _FREEZE_MAX_TOTAL_RATIO = 0.30  # or frozen ≥30% of the episode
 _MAX_FREEZE_REPORT = 8          # cap freeze regions in details (report size)
-_TS_SOFT_TOLERANCE = 0.02       # 2% span mismatch → review
+_TS_SOFT_TOLERANCE = 0.05       # 5% span mismatch → review (aligned with spec §4.7 default profile)
 _TS_HARD_TOLERANCE = 0.10       # 10% span mismatch → exclude (legacy; span_consistency is diagnostic by default)
 _DRIFT_WINDOW_SEC = 5.0         # window size for temporal drift computation
+
+# --- Profile presets (§4.6 / §4.7 / §4.12) ---
+_FREEZE_PROFILES: Dict[str, Dict[str, Any]] = {
+    "strict":   {"min_freeze_duration_sec": 0.3, "min_freeze_segments": 2, "max_single_freeze_sec": 1.5, "max_freeze_ratio": 0.15, "motion_ratio_threshold": 0.3, "motion_threshold_pct": 0.03},
+    "default":  {"min_freeze_duration_sec": 0.5, "min_freeze_segments": 3, "max_single_freeze_sec": 3.0, "max_freeze_ratio": 0.30, "motion_ratio_threshold": 0.5, "motion_threshold_pct": 0.05},
+    "lenient":  {"min_freeze_duration_sec": 1.0, "min_freeze_segments": 5, "max_single_freeze_sec": 5.0, "max_freeze_ratio": 0.50, "motion_ratio_threshold": 0.7, "motion_threshold_pct": 0.10},
+}
+
+_TS_ALIGNMENT_PROFILES: Dict[str, Dict[str, float]] = {
+    "strict":  {"review_threshold": 0.02, "exclude_threshold": 0.05},
+    "default": {"review_threshold": 0.05, "exclude_threshold": 0.10},
+    "lenient": {"review_threshold": 0.10, "exclude_threshold": 0.20},
+}
+
+_FRAME_INTEGRITY_PROFILES: Dict[str, Dict[str, float]] = {
+    "strict":  {"hard_threshold": 0.01, "soft_threshold": 0.005},
+    "default": {"hard_threshold": 0.05, "soft_threshold": 0.01},
+    "lenient": {"hard_threshold": 0.10, "soft_threshold": 0.05},
+}
 
 VIDEO_DEPS_MISSING = "video_deps_missing"
 """NA reason code (REQ-11, v0.7.1): PyAV is not installed.
@@ -770,8 +789,9 @@ class VideoFreezeMetric(MetricBase):
     )
 
     _VALID_MOTION_SOURCES = ("action", "state", "auto")
+    _VALID_PROFILES = ("strict", "default", "lenient")
 
-    def __init__(self, motion_source: str = "action") -> None:
+    def __init__(self, motion_source: str = "action", profile: str = "default") -> None:
         """Initialise VideoFreezeMetric.
 
         Args:
@@ -780,16 +800,24 @@ class VideoFreezeMetric(MetricBase):
                 ``"state"`` — cross-validate with state data when available.
                 ``"auto"`` — use state cross-validation if state data exists,
                     otherwise fall back to ``"action"`` mode.
+            profile: Sensitivity preset. One of ``"strict"``, ``"default"`` (default),
+                or ``"lenient"``.
 
         Raises:
-            ValueError: If *motion_source* is not one of the allowed values.
+            ValueError: If *motion_source* or *profile* is not one of the allowed values.
         """
         if motion_source not in self._VALID_MOTION_SOURCES:
             raise ValueError(
                 f"motion_source must be one of {self._VALID_MOTION_SOURCES}, "
                 f"got {motion_source!r}"
             )
+        if profile not in self._VALID_PROFILES:
+            raise ValueError(
+                f"profile must be one of {self._VALID_PROFILES}, got {profile!r}"
+            )
         self.motion_source = motion_source
+        self.profile = profile
+        self._profile_cfg = _FREEZE_PROFILES[profile]
 
     def _state_motion_signal(self, episode: EpisodeData) -> Optional[np.ndarray]:
         """Compute per-frame state motion intensity from observation.state.
@@ -1011,9 +1039,9 @@ class VideoFreezeMetric(MetricBase):
         episode_span_sec = episode.num_frames / max(float(fps), 1e-6)
         longest_sec = max(r["duration_sec"] for r in freeze_regions)
         conclusive = (
-            len(freeze_regions) >= _FREEZE_CONCLUSIVE_RUNS
-            or longest_sec >= _FREEZE_CONCLUSIVE_SECONDS
-            or (total_frozen_sec / max(episode_span_sec, 1e-6)) >= _FREEZE_MAX_TOTAL_RATIO
+            len(freeze_regions) >= self._profile_cfg["min_freeze_segments"]
+            or longest_sec >= self._profile_cfg["max_single_freeze_sec"]
+            or (total_frozen_sec / max(episode_span_sec, 1e-6)) >= self._profile_cfg["max_freeze_ratio"]
         )
 
         # D-22: If all freeze segments were state-cross-validated (state also
@@ -1109,6 +1137,25 @@ class VideoTimestampAlignmentMetric(MetricBase):
         "(sample-alignment hard evidence)."
     )
 
+    _VALID_PROFILES = ("strict", "default", "lenient")
+
+    def __init__(self, profile: str = "default") -> None:
+        """Initialise VideoTimestampAlignmentMetric.
+
+        Args:
+            profile: Sensitivity preset. One of ``"strict"``, ``"default"`` (default),
+                or ``"lenient"``.
+
+        Raises:
+            ValueError: If *profile* is not one of the allowed values.
+        """
+        if profile not in self._VALID_PROFILES:
+            raise ValueError(
+                f"profile must be one of {self._VALID_PROFILES}, got {profile!r}"
+            )
+        self.profile = profile
+        self._profile_cfg = _TS_ALIGNMENT_PROFILES[profile]
+
     def compute(self, episode: EpisodeData) -> MetricResult:
         meta = episode.meta or {}
         video_features: Dict[str, Dict[str, Any]] = meta.get("video_features") or {}
@@ -1175,10 +1222,12 @@ class VideoTimestampAlignmentMetric(MetricBase):
             )
 
         worst = max(checked, key=lambda c: abs(c["delta_ratio"]))
+        soft_tol = self._profile_cfg["review_threshold"]
+        hard_tol = self._profile_cfg["exclude_threshold"]
         details = {"checked": checked, "tolerances": {
-            "soft": _TS_SOFT_TOLERANCE, "hard": _TS_HARD_TOLERANCE}}
+            "soft": soft_tol, "hard": hard_tol, "profile": self.profile}}
 
-        if abs(worst["delta_ratio"]) > _TS_HARD_TOLERANCE:
+        if abs(worst["delta_ratio"]) > hard_tol:
             feat_desc = "; ".join(
                 f"{c['feature']}: video {c['video_span_sec']}s vs parquet "
                 f"{c['parquet_span_sec']}s ({c['delta_ratio']:+.1%})"
@@ -1189,12 +1238,12 @@ class VideoTimestampAlignmentMetric(MetricBase):
                 reason="video_parquet_span_mismatch",
                 message=(
                     f"Video/parquet timeline span mismatch beyond "
-                    f"{_TS_HARD_TOLERANCE:.0%}: {feat_desc}. Frame-index "
+                    f"{hard_tol:.0%}: {feat_desc}. Frame-index "
                     f"training would silently sample misaligned moments."
                 ),
                 details=details,
             )
-        if abs(worst["delta_ratio"]) > _TS_SOFT_TOLERANCE:
+        if abs(worst["delta_ratio"]) > soft_tol:
             return MetricResult.make_review(
                 name=self.name,
                 measurement={

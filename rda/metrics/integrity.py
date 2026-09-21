@@ -151,9 +151,9 @@ class MissingFramesMetric(MetricBase):
         dropout_count = len(dropout_features)
 
         if n_frames <= 0:
-            return MetricResult.make_pass(
+            return MetricResult.make_na(
                 name=self.name,
-                measurement={"score_compat": 1.0, "missing_frames": 0, "dropout_count": 0},
+                reason="empty_episode",
                 message="Empty episode, no frames to check.",
                 details=details,
             )

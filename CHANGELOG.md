@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.15 - 2026-09-21
+
+### Fixed
+- **DEV-01 (P0)**: `dataset_audit.py` fixed `ep_result.results` → `ep_result.metrics.values()`, dataset_summary now correctly populated.
+- **DEV-02 (P1)**: `lerobot_loader.py` added top-level `info["joint_limits"]` extraction with per-feature fallback.
+- **DEV-03 (P1)**: Implemented profile system (strict/default/lenient) for `video_freeze`, `video_timestamp_alignment`, `video_frame_integrity` — 6 configurable parameters now realized.
+- **DEV-04 (P2)**: `_TS_SOFT_TOLERANCE` corrected from 0.02 to 0.05, aligned with spec.
+- **DEV-05 (P2)**: `missing_dropout` now returns `make_na(reason="empty_episode")` for empty episodes instead of PASS.
+- **DEV-06 (P2)**: `invalid_values` now returns `make_na(reason="no_numeric_features")` when no numeric features exist.
+- **DEV-07 (P2)**: `timestamp_validity` now returns `make_na(reason="insufficient_timestamps")` when < 2 timestamps.
+- **DEV-08 (P3)**: `joint_limit` EXCLUDE path measurement output enriched via profile implementation.
+- **DEV-09 (P3)**: Removed unreachable `state_array_invalid_shape` dead code in `motion.py`.
+- **DEV-10 (P3)**: Spec §2 metric count documentation synchronized.
+- **DEV-11 (P2)**: `visual_quality.py` added v2.1 video path fallback (`videos/chunk-XXX/<feature>/episode_XXXXXX.mp4`).
+- **DEV-12 (P3)**: `video_frame_integrity` soft-level mismatches now return REVIEW instead of EXCLUDE.
+- **DEV-13 (P2)**: `json_report.py` added `_NumpySafeEncoder` for proper numpy type serialization.
+- **DEV-14 (P2)**: `lerobot_loader.py` v2.1 fps injection moved outside video-conditional block.
+
+### Changed
+- Governance docs updated: DECISIONS.md D-24 marked all fixed; 核心参数规范 version bumped to 0.9.15 with deviation annotations resolved.
+- Report/UI layer verified: no breaking changes needed — N/A verdict handling, verifiability, and badge rendering all compatible.
+
+---
+
 ## 0.9.14 - 2026-09-20
 
 ### Added

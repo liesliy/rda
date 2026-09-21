@@ -156,8 +156,8 @@ class DatasetAuditor:
                 "findings": [],
             }
             # Extract measurements from episode result
-            if hasattr(ep_result, "results"):
-                for metric_result in ep_result.results:
+            if hasattr(ep_result, "metrics"):
+                for metric_result in ep_result.metrics.values():
                     if hasattr(metric_result, "name") and hasattr(metric_result, "measurement"):
                         if metric_result.measurement:
                             ep_dict["measurements"][metric_result.name] = metric_result.measurement
