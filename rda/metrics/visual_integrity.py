@@ -976,6 +976,9 @@ class VideoFreezeMetric(MetricBase):
 
         # D-22: State cross-validation of freeze regions
         state_cross_validated_segments = 0
+        state_median = None
+        state_mad = None
+        state_threshold = None
         if use_state_cv and state_signal is not None and freeze_regions:
             state_median = float(np.median(state_signal))
             state_mad = float(np.median(np.abs(state_signal - state_median)))
@@ -1016,11 +1019,16 @@ class VideoFreezeMetric(MetricBase):
             "freeze_region_count": len(freeze_regions),
             "freeze_motion_source": effective_motion_source,
             "state_cross_validated_segments": state_cross_validated_segments,
-            "params": {
-                "decode": f"{_FREEZE_GRAY_SIZE}x{_FREEZE_GRAY_SIZE} gray",
-                "min_freeze_seconds": _FREEZE_MIN_SECONDS,
-                "epsilon": "adaptive: max(0.10, 0.25 x p10 of frame diffs)",
-            },
+        }
+        # D-25: surface threshold values when state cross-validation is active
+        if state_median is not None and state_mad is not None and state_threshold is not None:
+            details["state_motion_median"] = round(state_median, 6)
+            details["state_motion_mad"] = round(state_mad, 6)
+            details["state_motion_threshold"] = round(state_threshold, 6)
+        details["params"] = {
+            "decode": f"{_FREEZE_GRAY_SIZE}x{_FREEZE_GRAY_SIZE} gray",
+            "min_freeze_seconds": _FREEZE_MIN_SECONDS,
+            "epsilon": "adaptive: max(0.10, 0.25 x p10 of frame diffs)",
         }
 
         if not freeze_regions:

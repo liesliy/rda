@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.16 - 2026-09-24
+
+### Added
+- **video_freeze 阈值溯源输出**（D-25 / T-16）：当 `motion_source` 为 `state` 或 `auto`（且 state 可用）时，`details` 中新增 `state_motion_median`、`state_motion_mad`、`state_motion_threshold` 三个字段，便于外部复现阈值判定逻辑。
+- 新增 2 个单元测试覆盖阈值输出的存在性与条件排除。
+
+---
+
 ## 0.9.15 - 2026-09-21
 
 ### Fixed

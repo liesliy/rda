@@ -159,6 +159,38 @@ class TestVideoFreeze:
         verdict = classify_episode([res])
         assert verdict == AuditVerdict.PASS
 
+    def test_d25_threshold_fields_present_with_state(self, tmp_path):
+        """D-25: state_motion_median/mad/threshold appear when state CV is active."""
+        # Create episode with a long freeze (20 of 32 frames frozen) so freeze
+        # regions are detected and state cross-validation runs.
+        ep = _make_episode(tmp_path, cameras={"cam": (5, 25)})
+        metric = VideoFreezeMetric(motion_source="state")
+        r = metric.compute(ep)
+        assert r.availability == MetricAvailability.AVAILABLE
+        details = r.details
+        assert details["freeze_motion_source"] == "state"
+        assert "state_motion_median" in details
+        assert "state_motion_mad" in details
+        assert "state_motion_threshold" in details
+        assert isinstance(details["state_motion_median"], float)
+        assert isinstance(details["state_motion_mad"], float)
+        assert isinstance(details["state_motion_threshold"], float)
+        # threshold should equal median + 3 * mad (within rounding)
+        expected = details["state_motion_median"] + 3.0 * details["state_motion_mad"]
+        assert abs(details["state_motion_threshold"] - expected) < 1e-4
+
+    def test_d25_threshold_fields_absent_with_action_mode(self, tmp_path):
+        """D-25: threshold fields must NOT appear when motion_source='action'."""
+        ep = _make_episode(tmp_path, cameras={"cam": (5, 25)})
+        metric = VideoFreezeMetric(motion_source="action")
+        r = metric.compute(ep)
+        assert r.availability == MetricAvailability.AVAILABLE
+        details = r.details
+        assert details["freeze_motion_source"] == "action"
+        assert "state_motion_median" not in details
+        assert "state_motion_mad" not in details
+        assert "state_motion_threshold" not in details
+
 
 # ---------------------------------------------------------------------------
 # video_timestamp_alignment
