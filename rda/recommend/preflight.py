@@ -212,8 +212,10 @@ class PreflightAuditor:
                 continue
             try:
                 result = metric.compute(episode)
-            except Exception:
+            except Exception as e:
                 # Mirror EpisodeAuditor: metric errors don't affect verdict.
+                import logging
+                logging.getLogger(__name__).debug("Preflight metric %s failed: %s", name, e)
                 continue
             if result.availability != MetricAvailability.AVAILABLE:
                 continue

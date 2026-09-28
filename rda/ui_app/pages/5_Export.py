@@ -51,7 +51,7 @@ def _get_pattern_type(ep_result) -> str:
     try:
         from components.common import _detect_pattern_type
         return _detect_pattern_type(ep_result) or ""
-    except Exception:
+    except (ImportError, AttributeError):
         return ""
 
 def _generate_json_export(episodes, scope: str) -> str:
@@ -651,7 +651,7 @@ if st.button(
         with st.expander(t("export_stats")):
             st.json(export_report.to_dict())
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top-level UI catch-all
         progress_bar.empty()
         st.error(t("export_failed", err=e))
 

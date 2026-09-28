@@ -109,7 +109,7 @@ def _decode_span_gray(
             try:
                 tb = stream.time_base
                 container.seek(int(start_sec / tb), stream=stream)
-            except Exception:
+            except (OSError, ValueError):
                 pass  # seek unsupported → decode from start
             frames: List[np.ndarray] = []
             target_w = _FREEZE_GRAY_SIZE
@@ -132,7 +132,9 @@ def _decode_span_gray(
             if not frames:
                 return None
             return np.stack(frames)
-    except Exception:
+    except (OSError, ValueError) as e:
+        import logging
+        logging.getLogger(__name__).debug("Failed to decode video %s: %s", video_path, e)
         return None
 
 

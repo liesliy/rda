@@ -116,7 +116,7 @@ def _decode_span_gray(
             try:
                 tb = stream.time_base
                 container.seek(int(start_sec / tb), stream=stream)
-            except Exception:
+            except (OSError, ValueError):
                 pass
             frames: List[np.ndarray] = []
             target_w = _FREEZE_GRAY_SIZE
@@ -137,7 +137,9 @@ def _decode_span_gray(
             if not frames:
                 return None
             return np.stack(frames)
-    except Exception:
+    except (OSError, ValueError) as e:
+        import logging
+        logging.getLogger(__name__).debug("Failed to decode video %s: %s", video_path, e)
         return None
 
 
@@ -162,7 +164,7 @@ def _get_frame_timestamps(
             tb = float(stream.time_base)
             try:
                 container.seek(int(start_sec / tb), stream=stream)
-            except Exception:
+            except (OSError, ValueError):
                 pass
             timestamps: List[float] = []
             for packet_frame in container.decode(stream):
@@ -177,7 +179,9 @@ def _get_frame_timestamps(
             if not timestamps:
                 return None
             return np.array(timestamps, dtype=np.float64)
-    except Exception:
+    except (OSError, ValueError) as e:
+        import logging
+        logging.getLogger(__name__).debug("Failed to extract timestamps from %s: %s", video_path, e)
         return None
 
 
@@ -366,7 +370,7 @@ class VideoStreamPresenceMetric(MetricBase):
                         missing.append(feature)
                         continue
                 verified.append(feature)
-            except Exception:
+            except (OSError, ValueError):
                 missing.append(feature)
 
         details: Dict[str, Any] = {

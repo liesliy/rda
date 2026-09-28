@@ -96,7 +96,7 @@ class MissingFramesMetric(MetricBase):
             if timestamps is not None:
                 try:
                     _ts_arr = np.asarray(timestamps, dtype=np.float64)
-                except Exception:
+                except (ValueError, TypeError):
                     _ts_arr = None
 
             if _ts_arr is not None and _ts_arr.size >= 2:
@@ -186,6 +186,170 @@ class MissingFramesMetric(MetricBase):
                 message=msg,
                 details=details,
             )
+
+
+# ---------------------------------------------------------------------------
+# Metric 04 — Physical Plausibility (L1 WARNING-level)
+# ---------------------------------------------------------------------------
+
+# Default thresholds (configurable via constructor kwargs).
+# These are intentionally宽松 (lenient) — they catch obviously wrong data
+# (e.g., joint angles in degrees mislabelled as radians, force spikes of
+# 1e6 N) without false-flagging legitimate platform-specific ranges.
+_DEFAULT_ANGLE_LIMIT: float = 3.2  # slightly > π, catches degree-vs-radian errors
+_DEFAULT_FORCE_LIMIT: float = 1e4  # 10 kN — most lab robots are < 500 N
+_DEFAULT_TORQUE_LIMIT: float = 1e3  # 1000 Nm — most lab robots are < 50 Nm
+_DEFAULT_VELOCITY_LIMIT: float = 100.0  # 100 rad/s or m/s — generous ceiling
+
+# Feature name patterns for auto-detection (case-insensitive substring match)
+_ANGLE_PATTERNS = ("joint_pos", "joint_angle", "angle", "position")
+_FORCE_PATTERNS = ("force", "wrench_force")
+_TORQUE_PATTERNS = ("torque", "wrench_torque")
+_VELOCITY_PATTERNS = ("velocity", "vel", "joint_vel")
+
+
+class PhysicalPlausibilityMetric(MetricBase):
+    """Check numeric features for physically implausible values.
+
+    This is a Layer 1 WARNING-level check: it does NOT affect the episode
+    verdict (PASS/REVIEW/EXCLUDE) but reports warnings in the details.
+
+    Checks performed:
+      - Joint angles: |value| > angle_limit (default ±π + margin)
+      - Force/torque: |value| > force/torque_limit
+      - Velocity: |value| > velocity_limit
+
+    Thresholds are configurable via constructor kwargs:
+      angle_limit, force_limit, torque_limit, velocity_limit
+
+    The metric always returns PASS (assessment) with warnings attached
+    in the ``details["warnings"]`` list. Each warning is a dict with:
+      - feature: the feature key
+      - check: the type of check (e.g., "angle_range")
+      - max_abs: the maximum absolute value found
+      - threshold: the threshold that was exceeded
+      - count: number of frames exceeding the threshold
+    """
+
+    name = "physical_plausibility"
+    description = "Check for physically implausible numeric values (WARNING-level, does not affect verdict)."
+
+    def __init__(
+        self,
+        angle_limit: float = _DEFAULT_ANGLE_LIMIT,
+        force_limit: float = _DEFAULT_FORCE_LIMIT,
+        torque_limit: float = _DEFAULT_TORQUE_LIMIT,
+        velocity_limit: float = _DEFAULT_VELOCITY_LIMIT,
+    ) -> None:
+        self.angle_limit = angle_limit
+        self.force_limit = force_limit
+        self.torque_limit = torque_limit
+        self.velocity_limit = velocity_limit
+
+    def compute(self, episode: EpisodeData) -> MetricResult:
+        features = _collect_numeric_features(episode)
+        details: Dict[str, Any] = {
+            "checked_features": list(features.keys()),
+            "warnings": [],
+            "thresholds": {
+                "angle_limit": self.angle_limit,
+                "force_limit": self.force_limit,
+                "torque_limit": self.torque_limit,
+                "velocity_limit": self.velocity_limit,
+            },
+        }
+
+        if not features:
+            return MetricResult.make_pass(
+                name=self.name,
+                measurement={"score_compat": 1.0, "warning_count": 0},
+                message="No numeric features to check.",
+                details=details,
+            )
+
+        warnings: List[Dict[str, Any]] = []
+
+        for key, arr in features.items():
+            if arr.size == 0:
+                continue
+
+            key_lower = key.lower()
+
+            # Check angle-like features
+            if any(p in key_lower for p in _ANGLE_PATTERNS):
+                max_abs = float(np.nanmax(np.abs(arr)))
+                if max_abs > self.angle_limit:
+                    count = int(np.sum(np.abs(arr) > self.angle_limit))
+                    warnings.append({
+                        "feature": key,
+                        "check": "angle_range",
+                        "max_abs": max_abs,
+                        "threshold": self.angle_limit,
+                        "count": count,
+                    })
+
+            # Check force-like features
+            if any(p in key_lower for p in _FORCE_PATTERNS):
+                max_abs = float(np.nanmax(np.abs(arr)))
+                if max_abs > self.force_limit:
+                    count = int(np.sum(np.abs(arr) > self.force_limit))
+                    warnings.append({
+                        "feature": key,
+                        "check": "force_range",
+                        "max_abs": max_abs,
+                        "threshold": self.force_limit,
+                        "count": count,
+                    })
+
+            # Check torque-like features
+            if any(p in key_lower for p in _TORQUE_PATTERNS):
+                max_abs = float(np.nanmax(np.abs(arr)))
+                if max_abs > self.torque_limit:
+                    count = int(np.sum(np.abs(arr) > self.torque_limit))
+                    warnings.append({
+                        "feature": key,
+                        "check": "torque_range",
+                        "max_abs": max_abs,
+                        "threshold": self.torque_limit,
+                        "count": count,
+                    })
+
+            # Check velocity-like features
+            if any(p in key_lower for p in _VELOCITY_PATTERNS):
+                max_abs = float(np.nanmax(np.abs(arr)))
+                if max_abs > self.velocity_limit:
+                    count = int(np.sum(np.abs(arr) > self.velocity_limit))
+                    warnings.append({
+                        "feature": key,
+                        "check": "velocity_range",
+                        "max_abs": max_abs,
+                        "threshold": self.velocity_limit,
+                        "count": count,
+                    })
+
+        details["warnings"] = warnings
+
+        warning_count = len(warnings)
+        if warning_count == 0:
+            msg = f"All {len(features)} numeric features are within physical plausibility bounds."
+        else:
+            features_with_warnings = {w["feature"] for w in warnings}
+            msg = (
+                f"Physical plausibility warnings in {len(features_with_warnings)} "
+                f"feature(s): {', '.join(sorted(features_with_warnings))}."
+            )
+
+        # Always PASS — warnings are informational only (L1 WARNING-level)
+        return MetricResult.make_pass(
+            name=self.name,
+            measurement={
+                "score_compat": 1.0,
+                "warning_count": warning_count,
+                "features_checked": len(features),
+            },
+            message=msg,
+            details=details,
+        )
 
 
 # ---------------------------------------------------------------------------

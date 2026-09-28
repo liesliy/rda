@@ -77,7 +77,7 @@ def _run_audit(execution_tier=None) -> None:
             from rda.report.audit_history import save_audit_snapshot
             snapshot_path = save_audit_snapshot(result, info.path)
             st.session_state.dataset_path = info.path
-        except Exception:
+        except (OSError, ValueError) as e:
             pass  # snapshot failure does not affect the main flow
 
         progress_bar.progress(1.0, text=t("audit_done_progress"))
@@ -90,9 +90,11 @@ def _run_audit(execution_tier=None) -> None:
             icon="💚",
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top-level UI catch-all
         st.error(t("audit_failed", err=e))
         import traceback
+        import logging
+        logging.getLogger(__name__).error("Audit failed: %s", e, exc_info=True)
         with st.expander(t("audit_detail_err")):
             st.code(traceback.format_exc())
     finally:

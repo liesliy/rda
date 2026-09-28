@@ -636,7 +636,7 @@ def _render_trajectory_visualization(ep_id, ep_result, ep_row):
 
     try:
         episode_data = _load_episode_data(str(dataset_path), int(ep_id))
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         st.warning(t("ep_traj_load_err", err=e))
         return
 

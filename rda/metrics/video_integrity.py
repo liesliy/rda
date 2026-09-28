@@ -187,7 +187,7 @@ class VideoFrameIntegrityMetric(MetricBase):
 
             try:
                 video_frames = _count_video_frames(video_path)
-            except Exception:
+            except (OSError, ValueError):
                 unreadable.append(feature)
                 continue
 

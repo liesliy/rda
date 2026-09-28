@@ -251,8 +251,8 @@ def _infer_action_unit(info: dict, action_sample: Optional[np.ndarray] = None) -
                     range_label = "radians"
                 else:
                     range_label = "unknown"
-        except Exception:
-            pass  # Defensive: any error → skip range inference
+        except (ValueError, TypeError):
+            pass  # Defensive: non-numeric data → skip range inference
 
     # --- Combine signals ---
     sources = [s for s in [suffix_label, range_label] if s is not None]
@@ -481,7 +481,7 @@ def _load_tasks_parquet_v30(dataset_path: Path) -> Dict[int, str]:
 
     try:
         df = pd.read_parquet(tasks_path)
-    except Exception:
+    except (OSError, ValueError):
         return {}
 
     if "task_index" not in df.columns:
@@ -536,7 +536,7 @@ def _build_episode_file_index_v30(dataset_path: str) -> Dict[int, Path]:
         for parquet_path in sorted(chunk_dir.glob("*.parquet")):
             try:
                 table = pq.read_table(parquet_path, columns=["episode_index"])
-            except Exception:
+            except (OSError, ValueError):
                 continue
             for value in set(table.column("episode_index").to_pylist()):
                 if value is not None:
@@ -973,7 +973,7 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
                         iter_episodes(path, max_episodes=1), None
                     )
                     total_frames = first.num_frames * num_episodes if first else 0
-            except Exception:
+            except (OSError, ValueError, KeyError, AttributeError):
                 pass
 
         # T-12: Infer action_unit from info.json + action sample
@@ -989,8 +989,8 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
                 if action_sample is None:
                     # Take first available action array
                     action_sample = next(iter(first_ep.action.values()), None)
-        except Exception:
-            pass  # Defensive: any error → action_sample stays None
+        except (OSError, ValueError, KeyError, AttributeError):
+            pass  # Defensive: any data access error → action_sample stays None
 
         meta["action_unit"] = _infer_action_unit(info, action_sample)
 
@@ -1022,7 +1022,7 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
     # lerobot 0.6.0+ uses root= kwarg for local paths
     try:
         dataset = LRD(repo_id="", root=str(dataset_path))
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         # Older API: pass path as first positional arg
         dataset = LRD(str(dataset_path))
 
@@ -1120,7 +1120,7 @@ def iter_episodes(
                         ep.meta["video_features"] = v21_vf
                     ep.meta["fps"] = fps
                     yield ep
-                except Exception as e:
+                except (OSError, ValueError, KeyError, AttributeError) as e:
                     import warnings
                     warnings.warn(
                         f"Failed to read episode {int(ep_row['episode_index'])}: {e}"
@@ -1142,7 +1142,7 @@ def iter_episodes(
                     if declared_features:
                         ep.meta["declared_features"] = declared_features
                     yield ep
-                except Exception as e:
+                except (OSError, ValueError, KeyError, AttributeError) as e:
                     # Skip unreadable episodes but continue
                     import warnings
                     warnings.warn(
@@ -1169,7 +1169,7 @@ def iter_episodes(
 
     try:
         dataset = LRD(repo_id="", root=str(dataset_path))
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         dataset = LRD(str(dataset_path))
 
     # For lerobot API, iterate using hf_dataset and episode_index grouping

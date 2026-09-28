@@ -467,7 +467,7 @@ def _append_verifiability_section(
                 reason = ""
                 try:
                     reason = (m.assessment or {}).get("reason") or ""
-                except Exception:
+                except (AttributeError, TypeError):
                     reason = ""
                 if reason in ("single_camera", "no_video_features"):
                     found_na = True

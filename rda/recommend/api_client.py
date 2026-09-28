@@ -356,7 +356,7 @@ def _call_api(
         f"{api_url}/api/v1/recommend",
         json=body,
         timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": f"rda-cli/0.9.17"},
+        headers={"User-Agent": f"rda-cli/0.9.18"},
     )
 
     if resp.status_code == 429:
@@ -387,11 +387,11 @@ def _get_remote_rules_version() -> Optional[str]:
         resp = requests.get(
             f"{get_api_url()}/api/v1/health",
             timeout=10,
-            headers={"User-Agent": "rda-cli/0.9.17"},
+            headers={"User-Agent": "rda-cli/0.9.18"},
         )
         if resp.status_code == 200:
             return resp.json().get("rules_version")
-    except Exception:
+    except (requests.RequestException, OSError, ValueError):
         pass
     return None
 
@@ -500,7 +500,7 @@ def run_recommendation(
         )
     except ImportError as e:
         api_error = str(e)
-    except Exception as e:
+    except (OSError, ValueError, KeyError) as e:
         api_error = str(e)
 
     # Step 4: Handle API result or fallback

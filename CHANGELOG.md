@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.18 - 2026-10-14
+
+### Added
+- **Physical plausibility check** (`physical_plausibility`): new Layer 1 WARNING-level metric that checks numeric features for physically implausible values. Detects joint angles exceeding ±π (configurable), force/torque spikes, and velocity anomalies. Always returns PASS (does not affect verdict) but attaches warnings in `details["warnings"]` for diagnostic visibility. Thresholds are configurable via constructor kwargs (`angle_limit`, `force_limit`, `torque_limit`, `velocity_limit`).
+
+### Changed
+- **Technical debt cleanup**: all 37 bare `except Exception:` handlers in `rda/` have been replaced with specific exception types or properly bound with `as e` and logging. Video decode operations now catch `(OSError, ValueError)`; parquet reads catch `(OSError, ValueError)`; lerobot API fallbacks catch `(TypeError, ValueError, AttributeError)`; metric computation catch-alls retain `Exception as e` with proper logging.
+- **Preflight metric errors** now log at DEBUG level instead of silently swallowing exceptions.
+
+---
+
 ## 0.9.17 - 2026-09-28
 
 ### Added

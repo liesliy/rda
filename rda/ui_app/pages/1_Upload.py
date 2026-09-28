@@ -35,7 +35,7 @@ def _load_dataset(path_str: str) -> None:
             st.session_state.dataset_report = None
             st.session_state.episodes_df = None
             st.success(t("upload_loaded_ok", n=dataset_info.num_episodes))
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:
             st.error(t("upload_load_err", err=e))
 
 

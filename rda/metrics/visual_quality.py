@@ -317,7 +317,7 @@ def _decode_one_gray(video_path: Path, at_sec: float, fps: float) -> Optional[np
             tb = stream.time_base
             try:
                 container.seek(int(at_sec / tb), stream=stream)
-            except Exception:
+            except (OSError, ValueError):
                 pass
             for frame in container.decode(stream):
                 pts = float(frame.pts * tb) if frame.pts is not None else None
@@ -327,6 +327,8 @@ def _decode_one_gray(video_path: Path, at_sec: float, fps: float) -> Optional[np
                     frame.reformat(width=_DECODE_SIZE, height=_DECODE_SIZE,
                                    format="gray").to_ndarray()
                 )
-    except Exception:
+    except (OSError, ValueError) as e:
+        import logging
+        logging.getLogger(__name__).debug("Failed to decode video %s: %s", video_path, e)
         return None
     return None

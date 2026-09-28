@@ -26,6 +26,7 @@ from rda.metrics.integrity import (
     MissingFramesMetric,
     NaNInfMetric,
     SchemaShapeMetric,
+    PhysicalPlausibilityMetric,
 )
 from rda.metrics.temporal import (
     TimestampValidityMetric,
@@ -65,11 +66,13 @@ LAYER1_INTEGRITY: List[Type[MetricBase]] = [
     VideoFreezeMetric,
     VideoTimestampAlignmentMetric,
     VideoStreamPresenceMetric,
+    PhysicalPlausibilityMetric,
 ]
 """Layer 1 — Data Integrity: deterministic hard checks (pass/exclude).
 
 v0.9: VideoStreamSyncMetric split into VideoStreamPresenceMetric (L1)
 plus three diagnostic metrics in L2.
+v0.9.18: Added PhysicalPlausibilityMetric (WARNING-level, does not affect verdict).
 """
 
 LAYER2_TEMPORAL_MOTION: List[Type[MetricBase]] = [
@@ -168,6 +171,7 @@ __all__ = [
     "VideoFreezeMetric",
     "VideoTimestampAlignmentMetric",
     "VideoStreamPresenceMetric",
+    "PhysicalPlausibilityMetric",
     # Metric classes — Layer 2 (Temporal & Motion)
     "SensorSyncMetric",
     "JitterMetric",
