@@ -13,6 +13,12 @@ v0.9 changes (Phase 1):
   - compute_behavior_severity(): fixed distribution/coverage field mapping bug.
   - upgrade_verdict_by_behavior(): now opt-in (enabled=False by default).
 
+v0.9.17 changes:
+  - Added FROZEN_EPISODE_EMR_THRESHOLD and check_frozen_episode() to restore
+    frozen episode detection (regression fix from v0.9.7).
+  - Updated behavior severity brackets for action_discontinuity based on
+    ArmnetBench calibration (Youden's J optimal threshold = 15.5 spikes).
+
 Each episode is classified into one of three tiers based on metric results:
 
 - **PASS**: All critical metrics pass; the episode is ready for training.
@@ -105,6 +111,26 @@ DATASET_PROFILE_METRICS: List[str] = [
     "coverage",                 # State-space occupancy analysis
     "temporal_structure",       # Temporal structure / idle structure (renamed from temporal_sufficiency)
 ]
+
+
+# ---------------------------------------------------------------------------
+# Frozen Episode Detection (v0.9.17 regression fix)
+# ---------------------------------------------------------------------------
+# In v0.5.4, idle_ratio was in REVIEW_METRICS and would escalate frozen
+# episodes (effective_motion_ratio ≈ 0) to REVIEW. In v0.9, idle_ratio was
+# moved to DIAGNOSTIC_METRICS, breaking this detection.
+#
+# Calibration data (ArmnetBench, 2499 episodes, SO-101):
+#   - Blind test frozen episodes: EMR = 0% (injected, motion = 0)
+#   - ArmnetBench minimum EMR: 0.023 (success), 0.026 (failure)
+#   - Benchmark datasets minimum median EMR: ~5.3% (imperialcollege_sawyer)
+#
+# Threshold: EMR < 0.02 catches frozen episodes (EMR=0) with 0 false
+# positives on both ArmnetBench (min=0.023) and all 14 benchmark datasets.
+#
+# Reference: scripts/calibrate_thresholds.py, ArmnetBench full calibration.
+
+FROZEN_EPISODE_EMR_THRESHOLD: float = 0.02
 
 
 def classify_episode(
@@ -228,28 +254,31 @@ def compute_behavior_severity(
 
         elif m.name == "action_discontinuity":
             spikes = meas.get("spike_count", 0)
-            if spikes > 100:
-                severity += 30  # Extreme jitter
+            # v0.9.17: Thresholds calibrated on ArmnetBench (SO-101, 2499 eps).
+            # Youden optimal spike_count = 15.5 (J=0.59, AUC=0.86).
+            # Success: P75=13; Failure: median=27, P25=18, P75=37.
+            if spikes > 37:
+                severity += 30  # Extreme jitter (above failure P75)
                 findings.append({
                     "metric": "action_discontinuity",
                     "severity": 30,
-                    "reason": f"Spike count {spikes} > 100: extreme action discontinuity/jitter detected",
+                    "reason": f"Spike count {spikes} > 37: extreme action discontinuity (above failure P75 in ArmnetBench calibration)",
                     "measurement_value": spikes,
                 })
-            elif spikes > 50:
-                severity += 20  # High jitter
+            elif spikes > 27:
+                severity += 20  # High jitter (above failure median)
                 findings.append({
                     "metric": "action_discontinuity",
                     "severity": 20,
-                    "reason": f"Spike count {spikes} > 50: high action discontinuity/jitter",
+                    "reason": f"Spike count {spikes} > 27: high action discontinuity (above failure median in ArmnetBench calibration)",
                     "measurement_value": spikes,
                 })
-            elif spikes > 20:
-                severity += 10  # Moderate jitter
+            elif spikes > 16:
+                severity += 10  # Moderate jitter (above Youden optimal threshold)
                 findings.append({
                     "metric": "action_discontinuity",
                     "severity": 10,
-                    "reason": f"Spike count {spikes} > 20: moderate action discontinuity",
+                    "reason": f"Spike count {spikes} > 16: moderate action discontinuity (above Youden optimal threshold)",
                     "measurement_value": spikes,
                 })
 
@@ -337,5 +366,52 @@ def upgrade_verdict_by_behavior(
     severity, _ = compute_behavior_severity(metric_results)
     if severity >= 20:
         return AuditVerdict.REVIEW
+
+    return verdict
+
+
+def check_frozen_episode(
+    verdict: AuditVerdict,
+    metric_results: Sequence[MetricResult],
+    emr_threshold: float = FROZEN_EPISODE_EMR_THRESHOLD,
+) -> AuditVerdict:
+    """Upgrade verdict to REVIEW if the episode appears frozen.
+
+    v0.9.17 regression fix: In v0.5.4, idle_ratio findings would escalate
+    frozen episodes (motion ≈ 0%) to REVIEW. In v0.9, idle_ratio became
+    DIAGNOSTIC and lost its verdict influence. This function restores
+    frozen episode detection as a targeted, always-on check.
+
+    A "frozen" episode is one where effective_motion_ratio falls below
+    ``emr_threshold`` (default 0.02 = 2% motion). This threshold is
+    calibrated on ArmnetBench data:
+      - Blind test frozen episodes: EMR = 0%
+      - ArmnetBench minimum real EMR: 0.023 (success), 0.026 (failure)
+      - Benchmark datasets lowest median EMR: ~5.3% (imperialcollege_sawyer)
+
+    Only upgrades PASS → REVIEW. Never downgrades or escalates to EXCLUDE.
+
+    Args:
+        verdict: Current rule-based verdict.
+        metric_results: All metric results for the episode.
+        emr_threshold: Effective motion ratio below which the episode is
+            considered frozen. Default 0.02.
+
+    Returns:
+        AuditVerdict: REVIEW if frozen and currently PASS, otherwise unchanged.
+    """
+    if verdict != AuditVerdict.PASS:
+        return verdict  # Already REVIEW or EXCLUDE
+
+    for m in metric_results:
+        if m.name != "idle_ratio":
+            continue
+        if m.availability != MetricAvailability.AVAILABLE:
+            continue
+        emr = m.measurement.get("effective_motion_ratio")
+        if emr is None:
+            continue
+        if float(emr) < emr_threshold:
+            return AuditVerdict.REVIEW
 
     return verdict

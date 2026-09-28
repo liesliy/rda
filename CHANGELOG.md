@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.17 - 2026-09-28
+
+### Added
+- **Frozen episode detection** (`check_frozen_episode`): restores regression from v0.9.7 where frozen episodes (effective_motion_ratio ≈ 0) were no longer caught. New `FROZEN_EPISODE_EMR_THRESHOLD = 0.02` triggers PASS → REVIEW upgrade. Calibrated on ArmnetBench data: blind test frozen episodes (EMR=0) are caught; real data minimum EMR=0.023.
+- **Calibration script** (`scripts/calibrate_thresholds.py`): data-driven threshold optimization from ArmnetBench raw data using Youden's J statistic. Computes ROC-AUC, Cliff's delta, and optimal cutpoints for all key metrics.
+- **Data-driven severity brackets** for `action_discontinuity` in `compute_behavior_severity()`: thresholds updated from arbitrary (20/50/100) to ArmnetBench-calibrated (16/27/37) based on success/failure distribution analysis (ROC-AUC=0.86, N=2499).
+
+### Fixed
+- **Frozen episode regression**: idle_ratio was moved to DIAGNOSTIC_METRICS in v0.9, losing its verdict influence. Frozen episodes (0% motion) in blind tests were no longer caught. Fixed via dedicated `check_frozen_episode()` in the verdict pipeline, always-on.
+- Provenance docs updated for action_discontinuity and idle_ratio with calibration data sources and threshold rationale.
+
+### Changed
+- `compute_behavior_severity()` action_discontinuity brackets: 20→16, 50→27, 100→37 (ArmnetBench Youden optimal + distribution quantiles).
+
+---
+
 ## 0.9.16 - 2026-09-24
 
 ### Added

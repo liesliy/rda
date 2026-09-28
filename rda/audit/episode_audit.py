@@ -34,6 +34,7 @@ from rda.audit.rules import (
     AuditVerdict,
     classify_episode,
     upgrade_verdict_by_behavior,
+    check_frozen_episode,
     compute_behavior_severity,
     DIAGNOSTIC_METRICS,
 )
@@ -212,6 +213,10 @@ class EpisodeAuditor:
 
         # v0.9: Behavior-aware verdict upgrade is now opt-in (disabled by default).
         verdict = upgrade_verdict_by_behavior(verdict, list(metric_results.values()))
+
+        # v0.9.17: Frozen episode detection (regression fix).
+        # Always-on check: if effective_motion_ratio < threshold, upgrade to REVIEW.
+        verdict = check_frozen_episode(verdict, list(metric_results.values()))
 
         # Compute behavior severity and generate findings for explainability.
         # v0.9: Diagnostic findings are attached to diagnostic metrics' MetricResult

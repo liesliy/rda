@@ -495,6 +495,10 @@ class ActionDiscontinuityMetric(MetricBase):
     name = "action_discontinuity"
     description = "Detect abrupt jumps / discontinuities in action trajectories using MAD-based outlier detection."
 
+    # MAD z-score threshold for spike detection (per-timestep).
+    # NOT the same as spike_count classification threshold.
+    # Calibrated: Youden optimal spike_count=15.5 on ArmnetBench (ROC-AUC=0.86).
+    # See docs/provenance/action_discontinuity/algorithm.md for details.
     spike_threshold: float = 5.0
 
     def __init__(self, spike_threshold: float = 5.0, top_k_joints: int = 0) -> None:
@@ -657,6 +661,10 @@ class IdleRatioMetric(MetricBase):
     name = "idle_ratio"
     description = "Measure the ratio of idle / near-static frames with robust data-driven threshold."
 
+    # v0.9.17: Frozen episode detection uses FROZEN_EPISODE_EMR_THRESHOLD=0.02
+    # in rda/audit/rules.py (check_frozen_episode). These parameters control
+    # the per-episode idle segmentation, not the frozen verdict.
+    # See docs/provenance/idle_ratio/algorithm.md for calibration data.
     mad_multiplier: float = 3.0
     abs_threshold_floor: float = 1e-6
     num_bins: int = 30

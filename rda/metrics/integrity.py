@@ -103,6 +103,11 @@ class MissingFramesMetric(MetricBase):
                 dt = np.diff(_ts_arr)
                 median_dt = float(np.median(dt))
                 if median_dt > 0:
+                    # Gap threshold: 2.5× median dt.
+                    # Derived from T-02 decision in governance. Not re-calibrated
+                    # in v0.9.17 — ArmnetBench has 0 gap events across 2499 episodes
+                    # (all pass Layer 1 integrity), so no discriminative signal
+                    # for threshold optimization on this metric.
                     gap_threshold = median_dt * 2.5
                     gap_mask = dt > gap_threshold
                     gap_indices = np.where(gap_mask)[0]

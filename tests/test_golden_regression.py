@@ -106,11 +106,14 @@ def test_must_trigger_metrics_fire(catalog):
 # --- 3. v0.9 gate semantics: diagnostics never flip the verdict -------------
 
 def test_diagnostic_anomalies_never_escalate(catalog):
-    """Diagnostic-only scenarios (frozen arm, spikes, jitter) must stay PASS
-    even though they produce diagnostic findings — the core v0.9 guarantee."""
+    """Diagnostic-only scenarios (spikes, jitter) must stay PASS
+    even though they produce diagnostic findings — the core v0.9 guarantee.
+    
+    v0.9.17: frozen_arm_diagnostic is now REVIEW (frozen episode detection),
+    so it's excluded from this test. See test_frozen_arm_upgrades_to_review.
+    """
     _, results = catalog
-    for sid in ("frozen_arm_diagnostic", "action_spikes_diagnostic",
-                "sampling_jitter_diagnostic"):
+    for sid in ("action_spikes_diagnostic", "sampling_jitter_diagnostic"):
         if sid not in results:
             continue
         res = results[sid]
@@ -118,6 +121,17 @@ def test_diagnostic_anomalies_never_escalate(catalog):
             f"[{sid}] diagnostic anomaly must not change verdict, got {res.verdict.value}"
         )
         assert _fired(res), f"[{sid}] should still surface a diagnostic finding"
+
+
+def test_frozen_arm_upgrades_to_review(catalog):
+    """v0.9.17: frozen arm (EMR=0) must upgrade to REVIEW via check_frozen_episode."""
+    _, results = catalog
+    if "frozen_arm_diagnostic" not in results:
+        return
+    res = results["frozen_arm_diagnostic"]
+    assert res.verdict == AuditVerdict.REVIEW, (
+        f"[frozen_arm_diagnostic] frozen episode must be REVIEW, got {res.verdict.value}"
+    )
 
 
 def test_exclude_scenarios_driven_by_hard_critical(catalog):
@@ -246,14 +260,14 @@ def test_verdict_distribution_is_stable(catalog):
     for s in scenarios:
         dist[results[s.id].verdict] += 1
     if not _HAS_AV:
-        # clean + frozen + spikes + jitter = 4 PASS;
-        # joint_limit_approaching = 1 REVIEW;
+        # clean + spikes + jitter = 3 PASS;
+        # joint_limit_approaching + frozen_arm (v0.9.17) = 2 REVIEW;
         # nan + missing + joint_limit_violation = 3 EXCLUDE.
-        assert dist == {AuditVerdict.PASS: 4, AuditVerdict.REVIEW: 1,
+        assert dist == {AuditVerdict.PASS: 3, AuditVerdict.REVIEW: 2,
                         AuditVerdict.EXCLUDE: 3}, dist
     else:
         # +4 video scenarios: 1 pass, 3 exclude.
-        assert dist == {AuditVerdict.PASS: 5, AuditVerdict.REVIEW: 1,
+        assert dist == {AuditVerdict.PASS: 4, AuditVerdict.REVIEW: 2,
                         AuditVerdict.EXCLUDE: 6}, dist
 
 

@@ -262,9 +262,9 @@ NON_VIDEO_SCENARIOS: List[GoldenScenario] = [
     ),
     GoldenScenario(
         id="frozen_arm_diagnostic",
-        description="Arm nearly stationary: idle_ratio finding only, verdict must stay PASS.",
+        description="Arm held perfectly still: idle_ratio finding, verdict upgrades to REVIEW (v0.9.17 frozen detection).",
         builder=_sc_frozen_arm,
-        expected_verdict="pass",
+        expected_verdict="review",
         must_trigger=("idle_ratio",),
     ),
     GoldenScenario(
