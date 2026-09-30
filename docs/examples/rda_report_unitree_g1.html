@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RDA 审计宇树 200 集抽样报告 — 官方微调管线 × 数据筛选</title>
+<title>RDA 审计宇树公开数据集 — 过程与发现</title>
 <style>
 :root {
   --canvas: #f6f7f9;
@@ -164,6 +164,7 @@ p:last-child { margin-bottom: 0; }
 }
 .finding-box.critical { border-left-color: var(--exclude); }
 .finding-box.warning { border-left-color: var(--review); }
+.finding-box.pass-box { border-left-color: var(--pass); }
 .finding-box strong { display: block; margin-bottom: var(--space-xs); }
 
 /* Tables */
@@ -295,27 +296,15 @@ td.num { font-family: var(--font-mono); font-size: 0.85rem; text-align: right; w
 }
 .episode-body { padding: var(--space-md); }
 
-/* Recommendation */
-.rec-list { list-style: none; padding: 0; }
-.rec-list li {
-  position: relative;
-  padding: var(--space-sm) 0 var(--space-sm) var(--space-lg);
-  border-bottom: 1px solid var(--border-light);
-  font-size: 0.92rem;
+/* Note */
+.note-box {
+  background: var(--surface-alt);
+  border-radius: var(--radius-md);
+  padding: var(--space-md) var(--space-lg);
+  font-size: 0.9rem;
+  color: var(--ink-secondary);
+  margin-bottom: var(--space-lg);
 }
-.rec-list li:last-child { border-bottom: none; }
-.rec-list li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 14px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-.rec-list li.warn::before { background: var(--review); }
-.rec-list li.block::before { background: var(--exclude); }
 
 /* Conclusion */
 .conclusion-box {
@@ -365,8 +354,8 @@ footer {
 
 <header class="report-header">
   <div class="inner">
-    <h1>官方微调管线 × 数据筛选<br>RDA 审计宇树 200 集抽样报告</h1>
-    <p class="subtitle">基于宇树科技 HuggingFace 公开数据集，验证 RDA 在真实机器人数据上的审计能力</p>
+    <h1>RDA 审计宇树公开数据集<br>过程与发现</h1>
+    <p class="subtitle">基于宇树科技 HuggingFace 公开数据集，用 RDA 做了一次完整审计。过程中暴露了工具自身的问题，也得到了一些有价值的数据特征。</p>
     <div class="meta-row">
       <span><span class="label">审计工具</span> RDA v0.9.18</span>
       <span><span class="label">数据来源</span> <a href="https://huggingface.co/unitreerobotics" target="_blank" rel="noopener noreferrer" style="color:#60a5fa">unitreerobotics</a></span>
@@ -391,30 +380,35 @@ footer {
         <div class="desc">总帧数</div>
       </div>
       <div class="summary-card">
-        <div class="num exclude">4/4</div>
-        <div class="desc">抽样集全部判定 EXCLUDE</div>
+        <div class="num pass">4/4</div>
+        <div class="desc">L1 数据完整性全部通过</div>
       </div>
       <div class="summary-card">
-        <div class="num review">2 类</div>
-        <div class="desc">共性问题类型</div>
+        <div class="num review">2 项</div>
+        <div class="desc">行为层面观测指标触发 REVIEW</div>
       </div>
     </div>
 
-    <div class="finding-box critical">
-      <strong>⚠ 关键发现：视频流完整性问题导致全部 Episode 被排除</strong>
-      两个数据集的抽样 Episode 均因 <code>video_stream_presence</code> 规则被判定为 EXCLUDE，原因是存在摄像机流缺失（camera_stream_missing）。这是高严重度问题，直接影响多模态模型训练的视频输入质量。
+    <div class="finding-box pass-box">
+      <strong>✅ L1 数据完整性：全部通过</strong>
+      缺失帧、无效值、Schema 一致性、时间戳、物理合理性、采样抖动、视频完整性、冻结帧、时间戳对齐——全部 PASS。数据基础设施层面没有问题。
     </div>
 
     <div class="finding-box warning">
-      <strong>次要发现：动作连续性与有效运动比值得关注</strong>
-      Dex3 数据集的 Episode 1 出现 146 次动作跳变（spike），远超 ArmnetBench 校准基线的 P75 阈值（37 次）。两个数据集均存在有效运动比偏低的问题（28%~48%），提示采集效率有优化空间。
+      <strong>行为层面观测：idle_ratio 与 action_discontinuity</strong>
+      两个数据集的有效运动比在 28%~48% 之间，Dex3 的 action spike 数量显著高于 WBT（44~146 vs 6~9）。这些是数据的行为特征描述，不是质量判决。
+    </div>
+
+    <div class="finding-box critical">
+      <strong>⚠ 审计过程中的一个错误</strong>
+      首次审计 4 个 episode 全部被标记为 EXCLUDE，原因是 <code>video_stream_presence</code>（摄像机流缺失）。但 HuggingFace 仓库中视频文件完整存在，问题出在我们只下载了 Parquet 和 meta，没下载 videos 目录，加之云环境文件系统不支持符号链接，导致视频路径解析失败。这是 RDA 的缺陷——没有区分"数据集没有视频"和"本地没有下载视频"。补齐视频后重新审计，所有视频相关检查均通过。
     </div>
   </section>
 
   <!-- Audit Scope -->
   <section id="scope">
     <h2>审计范围与方法</h2>
-    <p>本次审计从宇树科技（Unitree Robotics）在 HuggingFace 发布的 124+ 个公开数据集中，选取了两个具有代表性的 LeRobot v3.0 格式数据集，每个数据集抽取前 2 个 Episode 进行全量审计。</p>
+    <p>从宇树科技（Unitree Robotics）在 HuggingFace 发布的公开数据集中，选取了两个具有代表性的 LeRobot v3.0 格式数据集，每个数据集抽取前 2 个 Episode 进行全量审计。视频文件（videos/）均已下载到本地并验证可解码。</p>
 
     <div class="table-wrap">
       <table>
@@ -456,7 +450,7 @@ footer {
     </div>
 
     <h3>RDA 审计规则覆盖</h3>
-    <p>RDA v0.9.18 对每个 Episode 执行 20 项独立检查，覆盖数据完整性、时序一致性、物理合理性、视频质量和行为特征五个维度。本次审计实际可用 14 项（6 项因无视频文件解码或关节限位数据标记为 N/A）。</p>
+    <p>RDA v0.9.18 对每个 Episode 执行 21 项独立检查，覆盖数据完整性（L1）、行为诊断（L2）、数据集效用（L3）三个层级。本次审计 19 项可用，2 项标记为 N/A（joint_limit 因数据集未提供关节限位、sensor_synchronization 因未提供逐流时间戳）。</p>
   </section>
 
   <!-- Dataset 1 Detail -->
@@ -477,11 +471,11 @@ footer {
           <div class="episode-header">
             <span class="ep-title">Episode 0</span>
             <span class="ep-meta">466 frames · 15.50s</span>
-            <span class="badge badge-exclude">EXCLUDE</span>
+            <span class="badge badge-pass">PASS</span>
           </div>
           <div class="episode-body">
             <div class="metric-group">
-              <h4>数据完整性</h4>
+              <h4>数据完整性（L1）</h4>
               <div class="metric-row">
                 <span class="metric-name">missing_dropout</span>
                 <span class="metric-value">缺失帧: 0 · 丢帧率: 0%</span>
@@ -505,11 +499,11 @@ footer {
             </div>
 
             <div class="metric-group">
-              <h4>视频质量</h4>
+              <h4>视频质量（L1）</h4>
               <div class="metric-row">
                 <span class="metric-name">video_stream_presence</span>
-                <span class="metric-value">摄像机流缺失</span>
-                <span class="metric-status"><span class="badge badge-exclude">EXCLUDE</span></span>
+                <span class="metric-value">4 路摄像头均存在且可读</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
               <div class="metric-row">
                 <span class="metric-name">video_timestamp_alignment</span>
@@ -523,18 +517,18 @@ footer {
               </div>
               <div class="metric-row">
                 <span class="metric-name">video_frame_integrity</span>
-                <span class="metric-value">视频文件未解码（无本地视频文件）</span>
-                <span class="metric-status"><span class="badge badge-na">N/A</span></span>
+                <span class="metric-value">视频可解码 · 帧数与数据对齐</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
               <div class="metric-row">
                 <span class="metric-name">video_freeze</span>
-                <span class="metric-value">视频不可解码</span>
-                <span class="metric-status"><span class="badge badge-na">N/A</span></span>
+                <span class="metric-value">无冻结帧</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
             </div>
 
             <div class="metric-group">
-              <h4>行为特征</h4>
+              <h4>行为特征（L2/L3）</h4>
               <div class="metric-row">
                 <span class="metric-name">physical_plausibility</span>
                 <span class="metric-value">警告: 0 · 检查特征: 6</span>
@@ -584,16 +578,35 @@ footer {
           <div class="episode-header">
             <span class="ep-title">Episode 1</span>
             <span class="ep-meta">471 frames · 15.67s</span>
-            <span class="badge badge-exclude">EXCLUDE</span>
+            <span class="badge badge-pass">PASS</span>
           </div>
           <div class="episode-body">
             <div class="metric-group">
-              <h4>关键指标变化</h4>
+              <h4>数据完整性（L1）</h4>
+              <div class="metric-row">
+                <span class="metric-name">missing_dropout</span>
+                <span class="metric-value">缺失帧: 0</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-name">invalid_values</span>
+                <span class="metric-value">无效值: 0</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
+              </div>
+              <div class="metric-row">
+                <span class="metric-name">timestamp_validity</span>
+                <span class="metric-value">重复时间戳: 0 · 中位间隔: 33.33ms</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
+              </div>
               <div class="metric-row">
                 <span class="metric-name">video_stream_presence</span>
-                <span class="metric-value">摄像机流缺失</span>
-                <span class="metric-status"><span class="badge badge-exclude">EXCLUDE</span></span>
+                <span class="metric-value">4 路摄像头均存在且可读</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
+            </div>
+
+            <div class="metric-group">
+              <h4>行为特征（L2/L3）</h4>
               <div class="metric-row">
                 <span class="metric-name">idle_ratio</span>
                 <span class="metric-value">有效运动比: 28.1% · 空闲步: 338/470</span>
@@ -611,7 +624,7 @@ footer {
               </div>
             </div>
             <p style="font-size:0.88rem; color: var(--ink-secondary); margin-top: var(--space-sm);">
-              💡 注意：Episode 1 的速度最大值出现异常尖峰（72.62 rad/s，为 Episode 0 的 13.5 倍），虽然整体仍通过阈值，但该 Episode 的动作跳变幅度（max Δ=2.60）显著高于 Episode 0（0.16），建议人工复核该段操作的物理合理性。
+              💡 Episode 1 的速度最大值 72.62 rad/s，为 Episode 0 的 13.5 倍；动作跳变幅度（max Δ=2.60）也显著高于 Episode 0（0.16）。虽然整体仍通过阈值，但值得结合视频确认该段操作是否有遥操作设备异常。
             </p>
           </div>
         </div>
@@ -638,11 +651,11 @@ footer {
           <div class="episode-header">
             <span class="ep-title">Episode 0</span>
             <span class="ep-meta">620 frames · 20.63s</span>
-            <span class="badge badge-exclude">EXCLUDE</span>
+            <span class="badge badge-pass">PASS</span>
           </div>
           <div class="episode-body">
             <div class="metric-group">
-              <h4>数据完整性</h4>
+              <h4>数据完整性（L1）</h4>
               <div class="metric-row">
                 <span class="metric-name">missing_dropout</span>
                 <span class="metric-value">缺失帧: 0</span>
@@ -658,14 +671,10 @@ footer {
                 <span class="metric-value">重复: 0 · 中位间隔: 33.33ms</span>
                 <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
-            </div>
-
-            <div class="metric-group">
-              <h4>视频质量</h4>
               <div class="metric-row">
                 <span class="metric-name">video_stream_presence</span>
-                <span class="metric-value">摄像机流缺失</span>
-                <span class="metric-status"><span class="badge badge-exclude">EXCLUDE</span></span>
+                <span class="metric-value">4 路摄像头均存在且可读</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
               <div class="metric-row">
                 <span class="metric-name">video_timestamp_alignment</span>
@@ -675,7 +684,7 @@ footer {
             </div>
 
             <div class="metric-group">
-              <h4>行为特征</h4>
+              <h4>行为特征（L2/L3）</h4>
               <div class="metric-row">
                 <span class="metric-name">action_discontinuity</span>
                 <span class="metric-value">跳变: <strong style="color:var(--review)">44</strong> · 跳变率: 7.1% · p99 Δ: 0.404</span>
@@ -710,19 +719,28 @@ footer {
           <div class="episode-header">
             <span class="ep-title">Episode 1</span>
             <span class="ep-meta">1192 frames · 39.70s</span>
-            <span class="badge badge-exclude">EXCLUDE</span>
+            <span class="badge badge-pass">PASS</span>
           </div>
           <div class="episode-body">
             <div class="metric-group">
-              <h4>关键指标变化</h4>
+              <h4>数据完整性（L1）</h4>
               <div class="metric-row">
-                <span class="metric-name">video_stream_presence</span>
-                <span class="metric-value">摄像机流缺失</span>
-                <span class="metric-status"><span class="badge badge-exclude">EXCLUDE</span></span>
+                <span class="metric-name">missing_dropout</span>
+                <span class="metric-value">缺失帧: 0</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
               </div>
               <div class="metric-row">
+                <span class="metric-name">video_stream_presence</span>
+                <span class="metric-value">4 路摄像头均存在且可读</span>
+                <span class="metric-status"><span class="badge badge-pass">PASS</span></span>
+              </div>
+            </div>
+
+            <div class="metric-group">
+              <h4>行为特征（L2/L3）</h4>
+              <div class="metric-row">
                 <span class="metric-name">action_discontinuity</span>
-                <span class="metric-value">跳变: <strong style="color:var(--exclude)">146</strong> · 跳变率: 12.3% · p99 Δ: 0.170</span>
+                <span class="metric-value">跳变: <strong style="color:var(--review)">146</strong> · 跳变率: 12.3% · p99 Δ: 0.170</span>
                 <span class="metric-status"><span class="badge badge-review">REVIEW</span></span>
               </div>
               <div class="metric-row">
@@ -742,7 +760,7 @@ footer {
               </div>
             </div>
             <p style="font-size:0.88rem; color: var(--ink-secondary); margin-top: var(--space-sm);">
-              💡 Episode 1 的动作跳变数（146 次）是 Episode 0（44 次）的 3.3 倍，远超 ArmnetBench 校准 P75 阈值（37 次）。同时加速度尖峰达到 234 次，提示该 Episode 存在较多不连续的控制信号，可能源于遥操作中的手柄抖动或控制切换。
+              💡 Episode 1 的动作跳变数（146 次）是 Episode 0（44 次）的 3.3 倍。Dex3 是三指灵巧手操作，手指需要频繁微调抓握姿态，动作天然更细碎。这些 spike 是否合理，需要结合具体视频片段判断。
             </p>
           </div>
         </div>
@@ -769,10 +787,10 @@ footer {
         <tbody>
           <tr>
             <td><strong>综合判定</strong></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
           </tr>
           <tr>
             <td>数据缺失</td>
@@ -804,10 +822,10 @@ footer {
           </tr>
           <tr>
             <td><strong>视频流完整性</strong></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
-            <td><span class="badge badge-exclude">EXCLUDE</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
+            <td><span class="badge badge-pass">PASS</span></td>
           </tr>
           <tr>
             <td>视频时间对齐</td>
@@ -842,7 +860,7 @@ footer {
             <td class="num">9</td>
             <td class="num">6</td>
             <td class="num" style="color:var(--review)">44</td>
-            <td class="num" style="color:var(--exclude)">146</td>
+            <td class="num" style="color:var(--review)">146</td>
           </tr>
           <tr>
             <td>路径长度</td>
@@ -856,50 +874,25 @@ footer {
     </div>
   </section>
 
-  <!-- Recommendations -->
-  <section id="recommendations">
-    <h2>训练数据选择建议</h2>
-    <p>基于 RDA 审计结果，针对使用宇树官方数据集训练 Action Expert 的场景，提出以下数据筛选建议：</p>
+  <!-- Observations -->
+  <section id="observations">
+    <h2>行为特征观测</h2>
+    <p>L1 全部通过后，L2/L3 层提供的是行为特征描述。这些是数据的客观画像，不是质量判决。</p>
 
-    <h3>🔴 必须处理的问题</h3>
-    <ul class="rec-list">
-      <li class="block"><strong>视频流缺失</strong>：两个数据集均存在摄像机流缺失问题。在训练视觉-语言-动作（VLA）模型前，必须确认所有必需的视觉输入流完整可用。建议联系宇树确认是否为发布时的裁剪策略，或重新下载完整视频分片。</li>
-      <li class="block"><strong>Dex3 动作跳变</strong>：Dex3 数据集 Episode 1 的 146 次动作跳变远超基线，直接用该 Episode 训练可能导致策略震荡。建议在训练前对跳变帧进行中值滤波或标记剔除。</li>
-    </ul>
+    <h3>idle_ratio：有效运动比</h3>
+    <p>WBT 28%~33%，Dex3 30%~48%。超过一半的帧处于低运动状态。遥操作数据中，操作者思考、定位、等待的时间都会被记录下来。这个指标对训练效率有参考意义——如果大量帧的运动信息接近零，跳帧采样可能是一个优化方向。</p>
 
-    <h3>🟡 建议优化的问题</h3>
-    <ul class="rec-list">
-      <li class="warn"><strong>有效运动比偏低</strong>：所有抽样 Episode 的有效运动比均在 28%~48% 之间，意味着超过一半的帧处于"空闲"状态。训练时可通过跳帧采样（如每 3~5 帧取 1 帧）减少冗余，提高训练效率。</li>
-      <li class="warn"><strong>WBT Episode 1 速度异常</strong>：最大速度 72.62 rad/s 远超同数据集 Episode 0 的 5.36 rad/s，建议人工确认该段数据是否存在遥操作设备故障或数据转换错误。</li>
-    </ul>
-
-    <h3>🟢 数据质量亮点</h3>
-    <ul class="rec-list">
-      <li><strong>数据完整性优秀</strong>：所有 Episode 的缺失帧、无效值、Schema 一致性均为满分通过，说明宇树的数据采集管线在数值层面质量可靠。</li>
-      <li><strong>时序精度极高</strong>：采样抖动 CV 值均低于 0.003%，时间戳间隔稳定在 33.33ms（30 FPS），满足高精度模仿学习的时间同步要求。</li>
-      <li><strong>物理合理性通过</strong>：所有 Episode 的物理合理性检查均无警告，关节角度、速度和加速度值在合理范围内（除 WBT Ep1 速度尖峰外）。</li>
-    </ul>
-
-    <h3>📋 全量审计建议</h3>
-    <p>本次仅抽样 4 个 Episode（占总量 0.56%），建议对以下场景进行全量审计：</p>
-    <ul class="rec-list">
-      <li>用于 Action Expert 微调的数据集，建议全量扫描并剔除 EXCLUDE 级别的 Episode</li>
-      <li>对 Dex3 系列数据集重点关注 action_discontinuity 指标，建立跳变阈值过滤机制</li>
-      <li>对 WBT 系列数据集补充视频文件完整性的端到端校验（需下载视频文件后重新审计）</li>
-      <li>使用 RDA 的 DatasetAuditor 对每个数据集生成整体质量评分，作为训练优先级排序依据</li>
-    </ul>
+    <h3>action_discontinuity：动作跳变</h3>
+    <p>WBT 6~9 个 spike，Dex3 44~146 个 spike。两个数据集的操作模式差异明显。WBT 是全身遥操作拿枕头，动作相对连贯；Dex3 是三指灵巧手做面包，手指需要频繁微调抓握姿态和力度，动作天然更细碎。Dex3 Episode 1 的 146 个 spike 值得结合视频看看具体片段。</p>
   </section>
 
   <!-- Conclusion -->
   <section id="conclusion">
     <h2>结论</h2>
     <div class="conclusion-box">
-      <h3>RDA 在真实机器人数据上的审计价值</h3>
-      <p>本次审计验证了 RDA v0.9.18 对宇树科技官方 LeRobot v3.0 格式数据集的完整审计能力。即使在仅使用 Parquet 数据（未解码视频）的条件下，RDA 仍然成功识别出了：</p>
-      <p style="margin-top: var(--space-sm);">
-        <strong style="color:#ffffff;">1 个阻断性问题</strong>（视频流缺失）+ <strong style="color:#fbbf24;">2 个警告级问题</strong>（动作跳变、低运动比）+ <strong style="color:#ffffff;">14 个通过项</strong>
-      </p>
-      <p style="margin-top: var(--space-md);">这些发现直接指导训练数据的选择与清洗：<span style="color:#ffffff;">EXCLUDE 级 Episode 不应进入训练集</span>，REVIEW 级 Episode 需要人工复核或预处理后使用。RDA 将数据质量判断从"凭经验感觉"转化为"可量化、可复现的自动化检查"，这正是大规模机器人数据管线中不可或缺的环节。</p>
+      <h3>审计结果</h3>
+      <p>宇树这两套公开数据集在数据完整性层面没有问题——4 个 episode 全部通过 L1 检查。行为层面的 idle_ratio 和 action_discontinuity 反映了不同任务类型（全身遥操作 vs 灵巧手精细操作）的差异，这些是数据特征，不是数据缺陷。</p>
+      <p style="margin-top: var(--space-md);">审计过程中 RDA 自身暴露了视频路径解析的问题，已记录待修。工具本身也需要被审计。</p>
       <p style="margin-top: var(--space-md); font-size: 0.88rem; color: #9ca3b0;">
         审计工具：<a href="https://pypi.org/project/robot-data-audit/" target="_blank" rel="noopener noreferrer">RDA (Robot Data Audit)</a> v0.9.18 · pip install robot-data-audit<br>
         数据来源：<a href="https://huggingface.co/unitreerobotics" target="_blank" rel="noopener noreferrer">HuggingFace / unitreerobotics</a> · Apache-2.0 License
@@ -916,7 +909,6 @@ footer {
 <script>
 (function() {
   try {
-    // Intercept internal anchor clicks for smooth scroll
     document.querySelectorAll('a[href^="#"]').forEach(function(anchor) {
       anchor.addEventListener('click', function(e) {
         var target = document.querySelector(this.getAttribute('href'));
