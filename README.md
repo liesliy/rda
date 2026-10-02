@@ -74,6 +74,7 @@ See [`docs/MVP_PRODUCT_SPEC.md`](docs/MVP_PRODUCT_SPEC.md) for full metric defin
 | L1 | Timestamp monotonicity | Clock resets, duplicates | ✅ |
 | L1 | Frame interval consistency | Irregular sampling | ✅ |
 | L1 | Schema compliance | Missing/extra fields | ✅ |
+| L1 | Numeric sanity | Values exceeding loose physical bounds (angle/force/torque/velocity) | ✅ |
 | L2 | Temporal gap detection | Time discontinuities | ✅ |
 | L2 | Sensor synchronization | Multi-sensor drift | ⚠️ |
 | L2 | Temporal sufficiency | Idle vs active structure | ✅ |

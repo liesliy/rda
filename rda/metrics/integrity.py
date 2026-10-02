@@ -208,11 +208,14 @@ _TORQUE_PATTERNS = ("torque", "wrench_torque")
 _VELOCITY_PATTERNS = ("velocity", "vel", "joint_vel")
 
 
-class PhysicalPlausibilityMetric(MetricBase):
-    """Check numeric features for physically implausible values.
+class NumericSanityMetric(MetricBase):
+    """Basic numeric sanity check for action/state fields.
 
-    This is a Layer 1 WARNING-level check: it does NOT affect the episode
-    verdict (PASS/REVIEW/EXCLUDE) but reports warnings in the details.
+    This is a Layer 1 safeguard that detects obviously wrong numeric values
+    (e.g., angles in degrees when radians are expected, forces in orders of
+    magnitude beyond typical lab robots). It does NOT affect the episode
+    verdict — warnings are recorded in ``details["warnings"]`` for
+    diagnostic reference only.
 
     Checks performed:
       - Joint angles: |value| > angle_limit (default ±π + margin)
@@ -222,7 +225,7 @@ class PhysicalPlausibilityMetric(MetricBase):
     Thresholds are configurable via constructor kwargs:
       angle_limit, force_limit, torque_limit, velocity_limit
 
-    The metric always returns PASS (assessment) with warnings attached
+    The metric always returns PASS with warnings attached
     in the ``details["warnings"]`` list. Each warning is a dict with:
       - feature: the feature key
       - check: the type of check (e.g., "angle_range")
@@ -231,8 +234,8 @@ class PhysicalPlausibilityMetric(MetricBase):
       - count: number of frames exceeding the threshold
     """
 
-    name = "physical_plausibility"
-    description = "Check for physically implausible numeric values (WARNING-level, does not affect verdict)."
+    name = "numeric_sanity"
+    description = "Basic numeric range check for extreme/outlier values (WARNING-level, does not affect verdict)."
 
     def __init__(
         self,
@@ -331,11 +334,11 @@ class PhysicalPlausibilityMetric(MetricBase):
 
         warning_count = len(warnings)
         if warning_count == 0:
-            msg = f"All {len(features)} numeric features are within physical plausibility bounds."
+            msg = f"All {len(features)} numeric features are within expected ranges."
         else:
             features_with_warnings = {w["feature"] for w in warnings}
             msg = (
-                f"Physical plausibility warnings in {len(features_with_warnings)} "
+                f"Numeric sanity warnings in {len(features_with_warnings)} "
                 f"feature(s): {', '.join(sorted(features_with_warnings))}."
             )
 

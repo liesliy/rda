@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Renamed `physical_plausibility` → `numeric_sanity`**: the metric's name now better reflects its actual purpose — a lightweight numeric range sanity check that catches obviously implausible values (e.g. degree/radian confusion, extreme force spikes) without claiming rigorous physical validation. Remains a Layer 1 WARNING-level metric that does not affect verdict. Documentation updated in README.md, README_zh.md, and CHANGELOG.md. Code rename pending.
+
+---
+
 ## 0.9.18 - 2026-10-14
 
 ### Added

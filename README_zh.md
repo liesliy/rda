@@ -39,7 +39,7 @@ EXCLUDE，诊断性测量永远不会。** 这把"数据坏了"和"数据看着�
 
 | 层级 | 职责 | 指标数 | 能否决定判定 |
 |---|---|---|---|
-| **L1 — 完整性门禁** | 确定性硬检查（缺失/NaN/限位/视频流） | 9 | ✅ PASS → EXCLUDE |
+| **L1 — 完整性门禁** | 确定性硬检查（缺失/NaN/限位/视频流/数值兜底） | 10 | ✅ PASS → EXCLUDE |
 | **L2 — 轨迹诊断** | 观测性运动与视频异常 | 8 | ❌ 仅出 finding |
 | **L3 — 数据集画像** | 训练数据效率与覆盖率 | 4 | ❌ 仅出 finding |
 | **L4 — 数据集汇总** | 数据集级 P10/P50/P90 聚合 | — | 📊 仅报告 |
@@ -71,7 +71,7 @@ pip install robot-data-audit
 ## 快速开始
 
 ```bash
-# 1. 审计数据集 —— 四层共 21 个指标，三档判定
+# 1. 审计数据集 —— 四层共 22 个指标，三档判定
 #    默认：Fast Audit（除 visual_quality 外的所有指标）
 rda audit /path/to/lerobot/dataset
 
@@ -98,11 +98,11 @@ measurement/finding，以及数据集级 `acceptance_summary`（P10/P50/P90 基�
 
 | 模式 | 参数 | 运行范围 |
 |---|---|---|
-| **Fast Audit** | *（默认）* | 全部 21 个指标，**跳过** `visual_quality` |
-| **Video Quality** | `--video-quality` | 全部 21 个指标，**含** `visual_quality` |
+| **Fast Audit** | *（默认）* | 全部 22 个指标，**跳过** `visual_quality` |
+| **Video Quality** | `--video-quality` | 全部 22 个指标，**含** `visual_quality` |
 | **No Video** | `--no-video` | 除视频相关（9 项）外的所有指标 |
 | **Video Only** | `--video-only` | 仅 9 项视频相关指标 |
-| **Full Audit** | `--full` | 全部 21 个指标，含 `visual_quality` |
+| **Full Audit** | `--full` | 全部 22 个指标，含 `visual_quality` |
 
 参数互斥。JSON 报告（schema v1.2）新增 `execution_tier` 字段和
 `video_quality` 区块，说明是否执行了视觉质量分析及其原因。文本报告头部也会
@@ -130,12 +130,13 @@ for name, metric in result.metrics.items():
         print(name, metric.measurement)
 ```
 
-## 21 个指标
+## 22 个指标
 
 **L1 — 完整性门禁（硬检查，可判 EXCLUDE）**
 `missing_dropout` · `invalid_values`（NaN/Inf）· `schema_consistency` ·
 `temporal_validity` · `joint_limit`（三级 PASS/REVIEW/EXCLUDE，参数
 `approach_threshold` / `consecutive_frames` / `jump_multiplier` 可配）·
+`numeric_sanity`（基础数值范围兜底检查：在 `invalid_values` 与 `joint_limit` 之间补充一层不依赖额外配置的粗略筛查，检测角度/力/力矩/速度等数值是否超出宽松物理上限，仅产生 WARNING 不影响判定）·
 `video_frame_integrity` · `video_freeze` · `video_timestamp_alignment` ·
 `video_stream_presence`
 
