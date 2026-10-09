@@ -40,8 +40,60 @@ from rda.io.schema import DatasetInfo, EpisodeData
 
 
 # ---------------------------------------------------------------------------
-# Format detection
+# Action field name aliases
 # ---------------------------------------------------------------------------
+# Some datasets use non-standard column names for action data. This mapping
+# normalises them so downstream code can always rely on a single key.
+# Keys are lower-cased for case-insensitive matching.
+
+_ACTION_FIELD_ALIASES: Dict[str, str] = {
+    "actions": "action",          # plural form (e.g. robomme)
+    "end_pose": "end_pose",       # umi_cup_in_the_wild — kept as sub-key
+    "start_pos": "start_pos",     # umi_cup_in_the_wild — kept as sub-key
+    "gripper_width": "gripper_width",  # umi_cup_in_the_wild — kept as sub-key
+}
+
+# Top-level aliases: when a feature/column matches one of these names exactly,
+# treat it as if it were "action" (single-array shorthand).
+_TOP_LEVEL_ACTION_ALIASES: Dict[str, str] = {
+    "actions": "action",
+}
+
+
+def _is_action_key(key: str) -> bool:
+    """Return True if *key* should be treated as an action field."""
+    lower = key.lower()
+    if lower == "action" or lower.startswith("action."):
+        return True
+    if lower in _TOP_LEVEL_ACTION_ALIASES:
+        return True
+    if lower in _ACTION_FIELD_ALIASES:
+        return True
+    return False
+
+
+def _to_action_key(key: str) -> str:
+    """Normalise an action column/feature name to its canonical sub-key.
+
+    - ``"action"`` → ``"action"``
+    - ``"actions"`` → ``"action"`` (top-level alias)
+    - ``"action.foo"`` → ``"foo"``
+    - ``"end_pose"`` → ``"end_pose"`` (kept as-is under the action dict)
+    """
+    lower = key.lower()
+    # Top-level alias → canonical name
+    if lower in _TOP_LEVEL_ACTION_ALIASES:
+        return _TOP_LEVEL_ACTION_ALIASES[lower]
+    # Dotted sub-key
+    if lower.startswith("action."):
+        return key.split(".", 1)[1]
+    # Named alias (end_pose, start_pos, gripper_width, etc.)
+    if lower in _ACTION_FIELD_ALIASES:
+        return _ACTION_FIELD_ALIASES[lower]
+    # Plain "action"
+    if lower == "action":
+        return key
+    return key
 
 
 def _detect_format_version(dataset_path: Path) -> str:
@@ -201,7 +253,7 @@ def _infer_action_unit(info: dict, action_sample: Optional[np.ndarray] = None) -
     for key, spec in features.items():
         if not isinstance(spec, dict):
             continue
-        if key == "action" or key.startswith("action."):
+        if _is_action_key(key):
             explicit = spec.get("action_unit")
             if explicit and isinstance(explicit, str):
                 return explicit
@@ -216,7 +268,7 @@ def _infer_action_unit(info: dict, action_sample: Optional[np.ndarray] = None) -
     }
     suffix_label: Optional[str] = None
     for key in features:
-        if key == "action" or key.startswith("action."):
+        if _is_action_key(key):
             lower_key = key.lower()
             for suffix, label in _SUFFIX_MAP.items():
                 if lower_key.endswith(suffix):
@@ -274,8 +326,8 @@ def _get_feature_keys(info: dict) -> tuple:
         if key.startswith("observation."):
             clean = key.replace("observation.", "", 1)
             modalities.append(clean)
-        elif key == "action" or key.startswith("action."):
-            clean = key.replace("action.", "", 1) if key.startswith("action.") else key
+        elif _is_action_key(key):
+            clean = _to_action_key(key)
             action_keys.append(clean)
     return modalities, action_keys
 
@@ -327,8 +379,8 @@ def _extract_episode_from_dataframe(
         action["action"] = action_vals
     else:
         for key in ep_df.columns:
-            if key.startswith("action."):
-                clean_key = key.replace("action.", "", 1)
+            if _is_action_key(key):
+                clean_key = _to_action_key(key)
                 action[clean_key] = np.array(ep_df[key].tolist())
 
     # Reward
@@ -576,6 +628,9 @@ def _read_v30_fallback_file(parquet_path: str):
         elif name in {"timestamp", "action", "next.reward", "next.done"}:
             columns.append(name)
         elif name.startswith("action."):
+            columns.append(name)
+        elif lower_name in _ACTION_FIELD_ALIASES:
+            # Alternative action column names (e.g. "actions", "end_pose")
             columns.append(name)
         elif name.startswith("observation.") and not any(
             token in lower_name for token in ("image", "video")
@@ -982,7 +1037,7 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
             first_ep = next(iter_episodes(path, max_episodes=1), None)
             if first_ep and first_ep.action:
                 # Collect the primary action array for sampling
-                for pref_key in ("action", "joint_pos", "position"):
+                for pref_key in ("action", "actions", "joint_pos", "position", "end_pose", "start_pos", "gripper_width"):
                     if pref_key in first_ep.action:
                         action_sample = first_ep.action[pref_key]
                         break
@@ -1209,8 +1264,8 @@ def iter_episodes(
             action["action"] = np.array(ep_frames["action"])
         else:
             for key in ep_frames.column_names:
-                if key.startswith("action."):
-                    clean_key = key.replace("action.", "", 1)
+                if _is_action_key(key):
+                    clean_key = _to_action_key(key)
                     action[clean_key] = np.array(ep_frames[key])
 
         # Reward / done

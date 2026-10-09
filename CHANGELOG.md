@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.20 - 2026-10-08
+
+### Added
+- **EXCLUDE verdict 原因标注**：审计结果现在会在 EXCLUDE 判定旁标注触发的具体 metric 名称和层级（如 `EXCLUDE (L1: video_stream_presence)`），用户无需再猜测排除原因。新增 `get_exclude_reasons()` 函数（`rda/audit/rules.py`），`EpisodeAuditResult` 新增 `exclude_reasons` 字段，文本报告和 JSON 报告均已同步更新。
+- **Action 字段别名兼容**：支持非标准 action 列名，包括 `actions`（复数形式，如 robomme 数据集）、`end_pose`/`start_pos`/`gripper_width`（如 umi_cup_in_the_wild 数据集）。新增 `_ACTION_FIELD_ALIASES`、`_TOP_LEVEL_ACTION_ALIASES` 映射表及 `_is_action_key()`、`_to_action_key()` 辅助函数（`rda/io/lerobot_loader.py`），`_get_feature_keys()`、`_extract_episode_from_dataframe()`、`_read_parquet_columns()`、`_infer_action_unit()`、`_primary_action_array()`（`rda/metrics/motion.py`）及 HF dataset 迭代逻辑均已同步适配。
+
+---
+
 ## 0.9.19 - 2026-10-02
 
 ### Changed

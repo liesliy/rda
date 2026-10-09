@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from rda.audit.rules import (
     AuditVerdict,
     classify_episode,
+    get_exclude_reasons,
     upgrade_verdict_by_behavior,
     check_frozen_episode,
     compute_behavior_severity,
@@ -76,6 +77,9 @@ class EpisodeAuditResult:
         has_platform_metrics: Whether the reference profile contains
             platform-specific metrics (and therefore ``platform_score``
             is meaningful).
+        exclude_reasons: Human-readable list of metrics and reasons
+            that triggered the EXCLUDE verdict. Empty when verdict is
+            PASS or REVIEW.
     """
 
     episode_index: int
@@ -91,6 +95,7 @@ class EpisodeAuditResult:
     combined_score: Optional[float] = None
     has_platform_metrics: bool = False
     behavior_severity: float = 0.0
+    exclude_reasons: List[str] = field(default_factory=list)
 
 
 class EpisodeAuditor:
@@ -218,6 +223,10 @@ class EpisodeAuditor:
         # Always-on check: if effective_motion_ratio < threshold, upgrade to REVIEW.
         verdict = check_frozen_episode(verdict, list(metric_results.values()))
 
+        # Compute exclude reasons: list which L1 metrics triggered EXCLUDE.
+        all_results = list(metric_results.values())
+        exclude_reasons = get_exclude_reasons(all_results) if verdict == AuditVerdict.EXCLUDE else []
+
         # Compute behavior severity and generate findings for explainability.
         # v0.9: Diagnostic findings are attached to diagnostic metrics' MetricResult
         # so they appear in reports, but they don't affect the verdict.
@@ -260,6 +269,7 @@ class EpisodeAuditor:
         # so this failure mode is visible.
         if episode.num_frames == 0:
             verdict = AuditVerdict.EXCLUDE
+            exclude_reasons = ["zero_frame_guard (L1): Episode has 0 frames — data may be missing or misaligned."]
             # Add a synthetic finding so the report explains why
             metric_results["_zero_frame_guard"] = MetricResult(
                 name="_zero_frame_guard",
@@ -289,6 +299,7 @@ class EpisodeAuditor:
             combined_score=combined_score,
             has_platform_metrics=has_platform_metrics,
             behavior_severity=behavior_severity,
+            exclude_reasons=exclude_reasons,
         )
 
     def __call__(self, episode: EpisodeData) -> EpisodeAuditResult:

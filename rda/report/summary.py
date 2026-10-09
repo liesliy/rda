@@ -111,6 +111,30 @@ def build_summary(result: DatasetAuditResult) -> AuditSummary:
 
 
 # ---------------------------------------------------------------------------
+# Exclude reasons helper
+# ---------------------------------------------------------------------------
+
+
+def _collect_exclude_reasons(
+    result: DatasetAuditResult,
+    episode_indices: List[int],
+) -> Dict[int, List[str]]:
+    """Collect exclude_reasons for the given episode indices.
+
+    Returns a dict mapping episode_index to list of reason strings.
+    """
+    reasons_by_ep: Dict[int, List[str]] = {}
+    for ep_idx in episode_indices:
+        ep = result.episodes.get(ep_idx)
+        if ep is None:
+            continue
+        ep_reasons = getattr(ep, "exclude_reasons", None)
+        if ep_reasons:
+            reasons_by_ep[ep_idx] = list(ep_reasons)
+    return reasons_by_ep
+
+
+# ---------------------------------------------------------------------------
 # Three-layer text report
 # ---------------------------------------------------------------------------
 
@@ -397,6 +421,23 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
         if len(compact.exclude_episodes) > 20:
             extra = f" ... (+{len(compact.exclude_episodes) - 20} more)"
         lines.append(f"  {ep_list}{extra}")
+
+        # Show per-episode exclude reasons (grouped by reason pattern)
+        from rda.report.summary import _collect_exclude_reasons
+        reasons_by_ep = _collect_exclude_reasons(result, compact.exclude_episodes[:20])
+        if reasons_by_ep:
+            # Aggregate: count which metrics triggered most EXCLUDEs
+            trigger_counts: Dict[str, int] = {}
+            for _ep_idx, reasons in reasons_by_ep.items():
+                for r in reasons:
+                    # Extract metric name from "metric_name (L1): ..."
+                    metric_name = r.split(" (L1):")[0] if " (L1):" in r else r
+                    trigger_counts[metric_name] = trigger_counts.get(metric_name, 0) + 1
+            if trigger_counts:
+                lines.append("  Triggering metrics:")
+                for metric_name, count in sorted(trigger_counts.items(), key=lambda x: -x[1]):
+                    pct = count / len(compact.exclude_episodes) * 100
+                    lines.append(f"    {metric_name:28s} {count:>3d} episodes ({pct:.0f}%)")
         lines.append("")
 
     lines.append("=" * 60)

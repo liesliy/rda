@@ -186,6 +186,45 @@ def classify_episode(
     return AuditVerdict.EXCLUDE
 
 
+def get_exclude_reasons(
+    metric_results: Sequence[MetricResult],
+    critical_metrics: Sequence[str] | None = None,
+) -> List[str]:
+    """Return human-readable reasons for EXCLUDE verdict triggers.
+
+    For each critical metric that caused an EXCLUDE (i.e. has a finding
+    and its assessment status is not "review"), returns a string like
+    ``"video_stream_presence (L1): Camera stream(s) missing or unreadable"``.
+
+    Only meaningful when the overall verdict is EXCLUDE. For PASS or REVIEW
+    verdicts, this returns an empty list.
+
+    Args:
+        metric_results: List of MetricResult from all computed metrics.
+        critical_metrics: Metric names considered critical. Defaults to
+            :data:`CRITICAL_METRICS`.
+
+    Returns:
+        List of reason strings for each EXCLUDE-triggering metric.
+    """
+    critical = set(critical_metrics) if critical_metrics is not None else set(CRITICAL_METRICS)
+    reasons: List[str] = []
+    for r in metric_results:
+        if r.availability != MetricAvailability.AVAILABLE:
+            continue
+        if not r.has_finding:
+            continue
+        if r.name not in critical:
+            continue
+        # REVIEW-level findings don't trigger EXCLUDE, skip them
+        if r.assessment.get("status") == "review":
+            continue
+        # This metric caused an EXCLUDE — build a readable reason
+        reason_text = r.assessment.get("reason", "") or r.message or r.name
+        reasons.append(f"{r.name} (L1): {reason_text}")
+    return reasons
+
+
 def compute_behavior_severity(
     metric_results: Sequence[MetricResult],
 ) -> tuple[float, list[dict]]:

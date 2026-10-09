@@ -80,6 +80,7 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
         "verdict": ep_result.verdict.value,
         "task_index": getattr(ep_result, "task_index", None),
         "task_description": getattr(ep_result, "task_description", None),
+        "exclude_reasons": getattr(ep_result, "exclude_reasons", []),
         "metrics": metrics_dict,
     }
 

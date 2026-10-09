@@ -80,9 +80,9 @@ def _primary_action_array(episode: EpisodeData) -> Optional[np.ndarray]:
     """Find the primary action array from an episode.
 
     Looks for well-known action keys (``joint_pos``, ``position``,
-    ``action``) first, then falls back to the highest-dimensional 2-D
-    floating-point action array (most complete control signal), then
-    to any action array at all.
+    ``action``, ``actions``, ``end_pose``, ``start_pos``) first, then
+    falls back to the highest-dimensional 2-D floating-point action
+    array (most complete control signal), then to any action array at all.
 
     Args:
         episode: The episode to search for an action array in.
@@ -92,7 +92,7 @@ def _primary_action_array(episode: EpisodeData) -> Optional[np.ndarray]:
     """
     if not episode.action:
         return None
-    for preferred in ("joint_pos", "position", "action"):
+    for preferred in ("joint_pos", "position", "action", "actions", "end_pose", "start_pos", "gripper_width"):
         if preferred in episode.action:
             arr = episode.action[preferred]
             if isinstance(arr, np.ndarray) and arr.ndim >= 1:
