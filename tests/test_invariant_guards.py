@@ -467,7 +467,11 @@ class TestINV006ReportVersionTrace:
             "INV-006: report missing 'report_schema_version' field"
         )
         # v0.9.21: bumped 1.2 → 1.3 with the new top-level `audit_effective`.
-        assert report["report_schema_version"] == "1.3", (
+        # v0.9.22: 1.3 → 1.4 — `task_description` is emitted redacted and
+        #          `task_description_redacted` records that it was rewritten.
+        #          Bumping this constant is a *reporting-contract* change:
+        #          consumers keying off the version must notice.
+        assert report["report_schema_version"] == "1.4", (
             f"INV-006: unexpected schema version {report['report_schema_version']}"
         )
 

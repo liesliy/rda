@@ -20,9 +20,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+
 from rda.audit.dataset_audit import DatasetAuditResult
 from rda.audit.rules import AuditVerdict, compute_behavior_severity
 from rda.metrics.base import MetricAvailability
+from rda.metrics.pii_scan import redact_text
 from rda.report.aggregation import aggregate_dataset_metrics
 from rda.report.summary import build_summary
 from rda.report.top_issues import compute_top_observations, compute_hero_metrics
@@ -47,6 +50,37 @@ class _NumpySafeEncoder(json.JSONEncoder):
 # ---------------------------------------------------------------------------
 # Engine-format: three-layer JSON report (backward compatible)
 # ---------------------------------------------------------------------------
+
+
+def _safe_free_text(value: Any) -> Tuple[Optional[str], bool]:
+    """Redact identifiers out of a free-text field before it is echoed.
+
+    See :func:`rda.metrics.pii_scan.redact_text` for why: a report that
+    repeats the identifier it just flagged has moved the leak, not closed
+    it. Task text is the richest operator-authored surface in the whole
+    dataset (names, phone numbers, "collected at <private address>" are
+    common), and it used to be echoed verbatim.
+
+    Returns:
+        ``(text, was_redacted)`` — ``(None, False)`` when the field is absent
+        so existing consumers keep seeing ``null`` rather than ``""``.
+    """
+    if not isinstance(value, str) or not value:
+        return None if value is None else value, False
+    redacted, hits = redact_text(value)
+    return redacted, bool(hits)
+
+
+def _safe_task_map(tasks: Any) -> Dict[Any, Any]:
+    """Redact every task string in the ``dataset.tasks`` index->text map.
+
+    Same leak surface as the per-episode field, at dataset level: the map
+    is populated straight from ``meta/tasks.parquet``.
+    """
+    if not isinstance(tasks, dict):
+        return {} if tasks in (None, {}) else tasks
+    return {k: _safe_free_text(v)[0] for k, v in tasks.items()}
+
 
 def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
     """Convert an EpisodeAuditResult to a JSON-serializable dict.
@@ -74,12 +108,17 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
             "has_finding": m.has_finding,
         }
 
+    task_text, task_redacted = _safe_free_text(
+        getattr(ep_result, "task_description", None)
+    )
+
     return {
         "episode_index": ep_result.episode_index,
         "num_frames": ep_result.num_frames,
         "verdict": ep_result.verdict.value,
         "task_index": getattr(ep_result, "task_index", None),
-        "task_description": getattr(ep_result, "task_description", None),
+        "task_description": task_text,
+        "task_description_redacted": task_redacted,
         "exclude_reasons": getattr(ep_result, "exclude_reasons", []),
         "metrics": metrics_dict,
     }
@@ -153,7 +192,9 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
         # Report SCHEMA version (layout of this JSON document), NOT the tool
         # version — bump when the report structure itself changes.
         # 1.3 (v0.9.21): added top-level ``audit_effective``.
-        "report_schema_version": "1.3",
+        # 1.4 (v0.9.22): ``task_description`` is now emitted redacted, with
+        #     ``task_description_redacted`` marking that it was rewritten.
+        "report_schema_version": "1.4",
         "tool_version": _rda_version,
         "dataset": {
             "path": result.dataset_info.path,
@@ -161,7 +202,7 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "total_frames": result.dataset_info.total_frames,
             "modalities": result.dataset_info.modalities,
             "num_tasks": result.dataset_info.meta.get("num_tasks"),
-            "tasks": result.dataset_info.meta.get("tasks", {}),
+            "tasks": _safe_task_map(result.dataset_info.meta.get("tasks", {})),
         },
         "summary": {
             "total_episodes": compact.total_episodes,
@@ -437,6 +478,8 @@ def _issue_code_for_metric(metric_name: str) -> str:
         "coverage": "DIS-03",
         # REQ-4 (v0.7.0) VA-B visual quality (measurement, REVIEW-grade)
         "visual_quality": "VIS-01",
+        # v0.9.22 privacy / PII exposure (WARNING-level by default)
+        "pii_scan": "PRV-01",
     }
     return mapping.get(metric_name, "UNK-00")
 
@@ -758,10 +801,15 @@ def generate_episode_report(
         if level == "HARD_FAIL" and _issue_code_for_metric(name) in issues
     ]
 
+    task_text, task_redacted = _safe_free_text(
+        getattr(ep_result, "task_description", None)
+    )
+
     return {
         "episode_id": episode_index,
         "task_index": getattr(ep_result, "task_index", None),
-        "task_description": getattr(ep_result, "task_description", None),
+        "task_description": task_text,
+        "task_description_redacted": task_redacted,
         "integrity_check": integrity_check,
         "behavior_verdict": behavior_verdict,
         "evidence_level": "HARD_FAIL" if not integrity_check["passed"] else (
@@ -1130,6 +1178,28 @@ def generate_dataset_report(result: DatasetAuditResult) -> Dict[str, Any]:
 # Blind / anonymized report — for external sharing
 # ---------------------------------------------------------------------------
 
+def _blind_free_text(anon: Dict[str, Any]) -> None:
+    """Replace every echoed task string in a blind report with a stub."""
+    import hashlib
+
+    def stub(text: str) -> str:
+        digest = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:8]
+        return f"redacted:{digest}"
+
+    tasks = anon.get("dataset", {}).get("tasks")
+    if isinstance(tasks, dict):
+        anon["dataset"]["tasks"] = {
+            k: stub(v) if isinstance(v, str) and v else v
+            for k, v in tasks.items()
+        }
+
+    for ep in anon.get("episodes", []) or []:
+        if not isinstance(ep, dict):
+            continue
+        if isinstance(ep.get("task_description"), str) and ep["task_description"]:
+            ep["task_description"] = stub(ep["task_description"])
+
+
 def anonymize_report(report: Dict[str, Any]) -> Dict[str, Any]:
     """Strip all identifying information from a JSON report for blind sharing.
 
@@ -1139,10 +1209,15 @@ def anonymize_report(report: Dict[str, Any]) -> Dict[str, Any]:
     The hash allows the receiver to deduplicate reports from the same
     dataset without knowing the original path.
 
+    If a task is already flagged by pii_scan the default (non-blind) report
+    still contains a redacted form of it; the blind report drops the text.
+
     What gets redacted:
         - ``dataset.path`` → ``"redacted:<hash>"``
         - ``dataset_id`` → ``"redacted:<hash>"``
         - ``profile.robot`` → ``"redacted"``
+        - ``episodes[*].task_description`` → ``"redacted:<hash>"``
+        - ``dataset.tasks`` → same stub, per task string
 
     What is **not** redacted (share-safe by design):
         - All metric values (idle ratio, spike count, etc.) — just numbers
@@ -1152,6 +1227,8 @@ def anonymize_report(report: Dict[str, Any]) -> Dict[str, Any]:
 
     No raw trajectory data, images, or action arrays are present in the
     report to begin with — RDA's audit only stores aggregated metrics.
+    Operator-authored free text was the one exception; it is now
+    stubbed out rather than echoed.
 
     Args:
         report: A report dict from :func:`generate_json_report` or
@@ -1188,6 +1265,14 @@ def anonymize_report(report: Dict[str, Any]) -> Dict[str, Any]:
 
     if isinstance(anon.get("profile"), dict):
         anon["profile"]["robot"] = "redacted"
+
+    # --- Operator-authored free text (v0.9.22) ---
+    # Detector-based redaction already ran at build time; here we go one
+    # step further and drop the text entirely, because regexes cannot
+    # recognise arbitrary names or home addresses and this report is the
+    # one explicitly destined for third parties. A per-text SHA-256 stub
+    # keeps "which episodes share a task?" answerable.
+    _blind_free_text(anon)
 
     # --- Mark as blind ---
     anon["blind_audit"] = True
