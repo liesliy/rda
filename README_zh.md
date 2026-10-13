@@ -71,17 +71,22 @@ pip install robot-data-audit
 ## 快速开始
 
 ```bash
-# 1. 审计数据集 —— 四层共 22 个指标，三档判定
+# 1. 审计数据集 —— 五层共 23 个指标，三档判定
 #    默认：Fast Audit（除 visual_quality 外的所有指标）
 rda audit /path/to/lerobot/dataset
 
 # 2. 包含视觉质量分析
 rda audit /path/to/lerobot/dataset --video-quality
 
-# 3. 按目标模型类型给出优化建议
+# 3. 隐私/安全扫描（需可选依赖才有画面人脸检测）
+pip install -U "robot-data-audit[pii]"
+rda audit /path/to/lerobot/dataset --pii-video            # 文本面 + 采样帧人脸
+rda audit /path/to/lerobot/dataset --pii-video --pii-strict   # 发现即判 EXCLUDE
+
+# 4. 按目标模型类型给出优化建议
 rda recommend /path/to/dataset --policy temporal   # 或 frame-wise
 
-# 4. 可选的网页面板
+# 5. 可选的网页面板
 rda ui
 ```
 
@@ -98,11 +103,11 @@ measurement/finding，以及数据集级 `acceptance_summary`（P10/P50/P90 基�
 
 | 模式 | 参数 | 运行范围 |
 |---|---|---|
-| **Fast Audit** | *（默认）* | 全部 22 个指标，**跳过** `visual_quality` |
-| **Video Quality** | `--video-quality` | 全部 22 个指标，**含** `visual_quality` |
+| **Fast Audit** | *（默认）* | 全部 23 个指标，**跳过** `visual_quality` |
+| **Video Quality** | `--video-quality` | 全部 23 个指标，**含** `visual_quality` |
 | **No Video** | `--no-video` | 除视频相关（9 项）外的所有指标 |
 | **Video Only** | `--video-only` | 仅 9 项视频相关指标 |
-| **Full Audit** | `--full` | 全部 22 个指标，含 `visual_quality` |
+| **Full Audit** | `--full` | 全部 23 个指标，含 `visual_quality` |
 
 参数互斥。JSON 报告（schema v1.2）新增 `execution_tier` 字段和
 `video_quality` 区块，说明是否执行了视觉质量分析及其原因。文本报告头部也会
@@ -130,7 +135,7 @@ for name, metric in result.metrics.items():
         print(name, metric.measurement)
 ```
 
-## 22 个指标
+## 23 个指标
 
 **L1 — 完整性门禁（硬检查，可判 EXCLUDE）**
 `missing_dropout` · `invalid_values`（NaN/Inf）· `schema_consistency` ·
@@ -152,6 +157,18 @@ for name, metric in result.metrics.items():
 **L3 — 数据集画像（效率与覆盖）**
 `idle_ratio`（三级回退：30-bin 谷底 → 3×MAD → 1e-6 下限）·
 `distribution` · `coverage` · `temporal_structure`
+
+**L4 — 安全与隐私（`pii_scan`，v0.9.22+）**
+检测三类**客观可复现的暴露证据**：文本面（meta / task 文本 / 特征名）中的
+直接标识符——手机号、**带 GB 11643-1999 校验位复核的身份证号**、邮箱、MAC、
+IPv4（仅公网地址记为暴露）；成对出现的精确经纬度特征；`--pii-video` 下视频
+采样帧中的人脸（需 `pip install "robot-data-audit[pii]"`）。
+
+> **默认 WARNING 级**：有发现只呈现（`has_finding=True`），**不判 EXCLUDE**。
+> 一次误报的人脸不该静默丢掉一段可用示教数据；`--pii-strict` 才把它升为
+> 本次运行的闸门。
+> **不做**：车牌 OCR、语音生物特征、知情同意与授权链审查——既不零覆盖，也不替代这些。
+> **报告不成泄漏通道**：发现项只有掩码片段 + SHA-256 指纹，任务文本回显前同样先脱敏。
 
 指标还按**跨平台可移植性**分类（MVP Spec v0.2.0 §1.5）：Tier-1 通用
 （`duration_sec`、`spike_count`、`effective_motion_ratio`，任意机器人可直接

@@ -84,6 +84,15 @@ See [`docs/MVP_PRODUCT_SPEC.md`](docs/MVP_PRODUCT_SPEC.md) for full metric defin
 | L4 | Duration outliers | Too short / too long | ✅ |
 | L4 | Spike count outliers | Unusual jerk profiles | ✅ |
 | L4 | Effective motion ratio | Low-activity episodes | ✅ |
+| SP | Privacy/PII exposure scan (`pii_scan`) | Identifiers in text surfaces, precise geolocation features, faces in sampled frames (`--pii-video`) | ✅ |
+
+> `pii_scan` (v0.9.22+) covers YD/T 6771-2026's **安全性** dimension — the only
+> P0 admission gate among the eight quality dimensions. It reports **evidence a
+> human must review**, not compliance: WARNING-level by default (never changes
+> the verdict), promoted to a gate only with `--pii-strict`. No OCR (licence
+> plates, badges), no voice biometrics, no consent review. Findings carry a
+> masked snippet plus a SHA-256 fingerprint — raw identifiers never reach the
+> report.
 
 ---
 
@@ -100,9 +109,14 @@ rda audit /path/to/dataset [OPTIONS]
 | `-o, --output FILE` | Save JSON report (default: `<path>/rda_report.json`) |
 | `--format [json\|text]` | Output format (default: `text`) |
 | `--platform TEXT` | Robot platform name for Tier 3 normalization |
+| `--blind` | Redact identifying paths and operator-authored free text for externally shareable reports |
+| `--pii-video` | Extend the privacy scan to sampled video frames (needs `[pii]` extra) |
+| `--pii-strict` | Treat privacy findings as an acceptance gate instead of a warning |
 | `-v, --verbose` | Verbose output |
 
-Exit codes: `0` = no EXCLUDE, `1` = error, `2` = at least one EXCLUDE.
+Exit codes: `0` = no EXCLUDE, `1` = error, `2` = at least one EXCLUDE,
+`3` = audit completed but **nothing was effectively audited** (zero episodes, or
+every episode lacked auditable content) — never report this as a pass.
 
 ---
 

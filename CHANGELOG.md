@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.22 - 2026-10-13
+
+### Added
+- **`pii_scan` 指标 —— 安全性维度首次覆盖**：YD/T 6771-2026 八项质量维度里唯一的 P0 准入项是安全性，此前 RDA 覆盖为零。新指标检测三类**客观可复现的暴露证据**：
+  1. **文本面**（episode meta、task 文本、特征名）中的直接标识符：中国手机号、**中国居民身份证号（按 GB 11643-1999 mod-11-2 校验位验证）**、邮箱、MAC 地址、IPv4（按 RFC1918 / loopback / link-local 区分公有与私有，仅公网地址记为暴露）。
+  2. **数值特征中的精确地理坐标**：lat / lon / GNSS / UTM 需成对出现且 95% 采样落在合法区间才记 finding；列名匹配由子串前缀改为分隔符整词匹配（`gps_lat`、`robot.lon` 现在能识别，同时 `translation` / `plate` / `relation` / `isolation` 内部含 "lat" 不再误报）。
+  3. **视频帧人脸**：`--pii-video` 开启时对每个相机采样帧跑 Haar 级联检测（需 `opencv-python-headless>=4.8,<5`）。
+- **判定策略：默认 WARNING，绝不默认的闸门。** 与 `numeric_sanity` 同一惯例：有发现时 `has_finding=True`、`assessment.status="pass"`，**判定不受影响**。一次误报的人脸检测不应该静默丢掉一段可用的示教数据。`--pii-strict` 才把 `pii_scan` 提升为本次运行的 CRITICAL 闸门（ HELP 文案已写明默认值）。实现上新增 `critical_with()`（`rda/audit/rules.py`）做**单次运行**的名单扩展，而刻意**不**写入 `CRITICAL_METRICS` 常量——那是全局默认值，一旦被污染，启发式检测器就握有了静默丢弃数据的权力。
+- **CLI**：`--pii-video`、`--pii-strict`。`--no-video` 下人脸扫描强制关闭（该档位已声明"未读视频"，报告不得暗示已检查帧）。
+- **可选依赖组** `pii`：`opencv-python-headless>=4.8,<5`（上界有实测依据：4.14.0 自带 19 个 Haar 级联 XML，5.0.0 一个都不带）。
+- JSON 报告 issue code `PRV-01`；新增 **Layer 4（安全/隐私）** 与 `LAYER4_SECURITY_PRIVACY`，`ALL_METRICS` 22 → 23。刻意新建层而非并入 L1——`json_report.py` 用 `LAYER1_INTEGRITY` 做完整性分组，混入会改变既有报告的分组语义。
+
+### Fixed
+- **报告自身就是泄漏源（本版本最重要）**：JSON 报告此前**原样回显** `task_description`（v0.9.20 任务标识功能引入）和 `dataset.tasks`，而这两处恰是整个数据集中最"有人味"的表面——采集者姓名、手机号、"采集于某住址"都写在里面。结果是：一次审计报出了 3 个标识符，同一份报告在下一层把 3 个标识符原文完整地又印了一遍。现在报告层所有自由文本回显先过 `redact_text()`，命中处替换为 `[REDACTED:<type>]`（任务语义保留：`"pick up the red block"` 照旧可读），并新增布尔字段 `task_description_redacted` 标记该字段被改写。**该函数与指标共用同一张检测器表和同一套校验器**，因此"报告隐藏了什么"与"报告报了什么"不可能分歧——测试 `test_metric_and_report_disagree_on_nothing` 钉住这一点。超出扫描预算（10 万字符）的文本不再回显，而是显式标注截断：扫描止于此，其后即未知，不能当作"已检查且干净"。
+- **`--blind` 名不副实**：该模式文档承诺"可外发共享"，却从未处理任何自由文本。检测式脱敏识别不了任意人名和住址，因此 blind 模式不依赖它——所有任务文本替换为稳定的 SHA-256 短哈希桩 `redacted:<8位>`，相同文本仍可跨 episode 归并。其 docstring 此前断言"报告中不存在原始文本"，该断言在 task 文本面前本就不成立，已连同去重一起修正。
+- **JSON 序列化崩溃**：`rda/report/json_report.py` 的 `_NumpySafeEncoder` 使用了 `np.` 却从未 `import numpy`，任何携带 numpy 标量/数组的报告在序列化时直接 `NameError`（实测触发源：`temporal_structure` 的 `idle_prefix_frames: int64`）。该缺陷在 HEAD 已存在，与本次新增功能无关——用去掉 `pii_scan` 的对照可以复现。已修复并补回归测试。
+- 邮箱正则漏检单级域名（`name@company.com`）：域名尾部锚组要求至少两段点分，已改为 `*`。
+
+### Changed
+- `report_schema_version` `1.3` → `1.4`（新增 `task_description_redacted`，且 `task_description` 内容语义变更）。
+
+### Tests
+- `tests/test_pii_scan.py`（51 项）：验证器精度 / 检测召回与假阳性对照 / **不泄漏**（原始标识符既不得进入 `measurement`、`details`、`message`，也不得出现在 JSON 报告的任何节点）/ 判定策略（默认不改判定、`--pii-strict` 才 EXCLUDE）／优雅降级（opencv 缺失、opencv 5.x 无级联、`RDA_HAAR_CASCADE` 覆盖、视频文件缺失逐相机上报）／执行档位交互（`--no-video` 下文本扫描仍须执行；真实机械臂视频零人脸误报且必须证明确实解码成功，避免"没读到所以通过"的空过）。
+- `tests/test_invariant_guards.py` 的 INV-006 随 schema 版本同步更新至 `1.4`。
+
+### 已知边界（不掩饰）
+本指标**不声称**数据集合规、不声称已获知情同意、不声称找全了每一帧的每一张人脸：无 OCR（车牌/门牌/工牌），无语音生物特征，无授权链审查；人脸检测只对采样帧（默认 5 帧/相机）。它产出的是**待人工复核项**，不是隐私合规证明。
+
+---
+
 ## 0.9.21 - 2026-10-13
 
 ### Fixed
