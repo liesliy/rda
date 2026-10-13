@@ -30,6 +30,10 @@ dependencies = [
 [project.optional-dependencies]
 lerobot = ["lerobot>=0.6"]
 video = ["av>=12.0"]
+# Face detection inside pii_scan needs a Haar cascade. Verified 2026-10-13:
+# opencv-python-headless 4.14.0 ships haarcascade_frontalface_default.xml,
+# 5.0.0 ships none at all — hence the upper bound, not conservatism.
+pii = ["opencv-python-headless>=4.8,<5"]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.1"]
 ui = ["streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
 all = ["lerobot>=0.6", "av>=12.0", "streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]

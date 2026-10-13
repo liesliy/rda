@@ -148,6 +148,29 @@ def cli(ctx: click.Context) -> None:
     ),
 )
 @click.option(
+    "--pii-video",
+    "pii_video",
+    is_flag=True,
+    default=False,
+    help=(
+        "Extend the privacy scan into video: sample frames per camera and "
+        "run face detection (requires opencv-python). Off by default "
+        "because it is the only expensive part of pii_scan."
+    ),
+)
+@click.option(
+    "--pii-strict",
+    "pii_strict",
+    is_flag=True,
+    default=False,
+    help=(
+        "Treat PII findings as an acceptance gate: promote pii_scan into "
+        "the critical metric list for this run, so episodes with privacy "
+        "findings are graded EXCLUDE. Default is WARNING-level "
+        "(findings reported, verdict untouched)."
+    ),
+)
+@click.option(
     "--freeze-motion-source",
     "freeze_motion_source",
     type=click.Choice(["action", "state", "auto"], case_sensitive=False),
@@ -173,6 +196,8 @@ def audit(
     video_only: bool,
     full_audit: bool,
     freeze_motion_source: str,
+    pii_video: bool,
+    pii_strict: bool,
 ) -> None:
     """Audit a LeRobot dataset at the given PATH.
 
@@ -195,6 +220,17 @@ def audit(
       rda audit ./my_dataset --blind  # anonymized report for external sharing
       rda audit ./my_dataset --video-quality  # include visual quality checks
       rda audit ./my_dataset --no-video  # skip all video metrics
+
+    \b
+    Privacy / PII scan (v0.9.22):
+      (default)     pii_scan runs on text surfaces and numeric features;
+                    findings are reported as WARNING and do NOT change
+                    the episode verdict.
+      --pii-video   additionally sample video frames and detect faces
+                    (requires opencv-python).
+      --pii-strict  promote pii_scan into the critical list for this run,
+                    so privacy findings grade EXCLUDE. Use for acceptance
+                    gating, not for routine development runs.
       rda audit ./my_dataset --full  # full audit with all metrics
 
     \b
@@ -310,10 +346,28 @@ def audit(
         click.echo("")
 
     # --- Run the audit ------------------------------------------------------
+    # Video face scanning is meaningless (and dishonest) under --no-video:
+    # the tier declares that no video was read, so the report must not imply
+    # frames were inspected.
+    scan_video = bool(pii_video) and execution_tier != ExecutionTier.NO_VIDEO
     metric_kwargs = {
         "video_freeze": {"motion_source": freeze_motion_source},
+        "pii_scan": {"scan_video": scan_video},
     }
-    auditor = DatasetAuditor(execution_tier=execution_tier, metric_kwargs=metric_kwargs)
+    # v0.9.22: pii_scan is WARNING-level unless explicitly promoted to the
+    # acceptance gate. The promotion is per-run so it never silently changes
+    # how a report produced without the flag should be read.
+    critical_metrics = None
+    if pii_strict:
+        from rda.audit.rules import critical_with
+
+        critical_metrics = critical_with(["pii_scan"])
+
+    auditor = DatasetAuditor(
+        execution_tier=execution_tier,
+        metric_kwargs=metric_kwargs,
+        critical_metrics=critical_metrics,
+    )
     try:
         episode_iter = iter_episodes(path_str)
         result = auditor.audit_dataset(dataset_info, episode_iter)

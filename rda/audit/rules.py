@@ -73,6 +73,23 @@ CRITICAL_METRICS: List[str] = [
 ]
 
 
+def critical_with(extra: Sequence[str]) -> List[str]:
+    """Return CRITICAL_METRICS extended with ``extra`` metric names.
+
+    Used by ``--pii-strict`` to promote WARNING-level metrics into the
+    acceptance gate **for that run only**. They are deliberately NOT added
+    to :data:`CRITICAL_METRICS` itself: doing so would make the default
+    verdict depend on a heuristic detector, so a false positive would
+    silently EXCLUDE usable data. Promotion must be an explicit operator
+    decision, recorded in the command that produced the report.
+    """
+    out = list(CRITICAL_METRICS)
+    for n in extra:
+        if n not in out:
+            out.append(n)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Trajectory Diagnostics — DIAGNOSTIC metrics
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ Two orthogonal classification systems are provided:
   Layer 1 — Data Integrity: deterministic pass/fail hard checks
   Layer 2 — Temporal & Motion Anomaly: observational measurements
   Layer 3 — Dataset Utility: training data efficiency analysis
+  Layer 4 — Security & Privacy: PII / sensitive exposure (v0.9.22)
 
 **Portability Tiers** (cross-platform comparability, per MVP Spec v0.2.0 §1.5):
   Tier 1 — Universal: directly comparable across platforms
@@ -41,6 +42,7 @@ from rda.metrics.motion import (
     IdleRatioMetric,
 )
 from rda.metrics.distribution import DistributionMetric, CoverageMetric
+from rda.metrics.pii_scan import PIIScanMetric
 from rda.metrics.video_integrity import VideoFrameIntegrityMetric
 from rda.metrics.visual_integrity import (
     VideoFreezeMetric,
@@ -103,11 +105,29 @@ v0.9: Added TemporalStructureMetric (renamed from TemporalSufficiencyMetric).
 Moved from L2 to L3 since it describes dataset-level temporal structure
 rather than per-episode motion anomalies."""
 
-ALL_METRICS: List[Type[MetricBase]] = LAYER1_INTEGRITY + LAYER2_TEMPORAL_MOTION + LAYER3_DATASET_UTILITY
+LAYER4_SECURITY_PRIVACY: List[Type[MetricBase]] = [
+    PIIScanMetric,
+]
+"""Layer 4 — Security & Privacy: personally identifiable exposure.
+
+v0.9.22: added for YD/T 6771-2026 安全性 (the only P0 admission gate among
+the eight quality dimensions). Deliberately a separate layer rather than
+folding into L1: ``rda/report/json_report.py`` groups results by
+``LAYER1_INTEGRITY`` for the integrity section, and a privacy finding is
+neither an integrity failure nor a quality measurement.
+
+WARNING-level by default (findings visible, verdict untouched); promoted to
+the critical gate only under ``--pii-strict``."""
+
+ALL_METRICS: List[Type[MetricBase]] = (
+    LAYER1_INTEGRITY + LAYER2_TEMPORAL_MOTION
+    + LAYER3_DATASET_UTILITY + LAYER4_SECURITY_PRIVACY
+)
 """All metric classes, in architectural layer order.
 
 v0.9: grew from 18 to 20 with the video_stream_sync split into
-4 independent metrics (1 L1 + 3 L2)."""
+4 independent metrics (1 L1 + 3 L2).
+v0.9.22: grew to 23 with the addition of pii_scan (L4)."""
 
 # ---------------------------------------------------------------------------
 # Portability Tier classification (per MVP Spec v0.2.0 §1.5)
@@ -186,12 +206,15 @@ __all__ = [
     "DistributionMetric",
     "CoverageMetric",
     "TemporalStructureMetric",
+    # Metric classes — Layer 4 (Security & Privacy)
+    "PIIScanMetric",
     # Backward compatibility alias (deprecated, use TemporalStructureMetric)
     "TemporalSufficiencyMetric",
     # Architectural Layer classification
     "LAYER1_INTEGRITY",
     "LAYER2_TEMPORAL_MOTION",
     "LAYER3_DATASET_UTILITY",
+    "LAYER4_SECURITY_PRIVACY",
     "ALL_METRICS",
     # Portability Tier classification (MVP Spec v0.2.0 §1.5)
     "TIER1_UNIVERSAL",

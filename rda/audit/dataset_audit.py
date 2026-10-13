@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 from rda.audit.episode_audit import EpisodeAuditResult, EpisodeAuditor
 from rda.audit.rules import AuditVerdict
@@ -81,6 +81,8 @@ class DatasetAuditor:
         execution_tier: Execution tier controlling which metrics to run (v0.9.4).
         metric_kwargs: Optional mapping from metric name to extra constructor
             keyword arguments (v0.9.14).
+        critical_metrics: Optional override of the critical metric list used
+            for verdict classification (v0.9.22, see ``--pii-strict``).
     """
 
     def __init__(
@@ -89,6 +91,7 @@ class DatasetAuditor:
         reference: Optional[ReferenceProfile] = None,
         execution_tier: Optional[Any] = None,
         metric_kwargs: Optional[dict] = None,
+        critical_metrics: Optional[Sequence[str]] = None,
     ) -> None:
         """Initialize the dataset auditor.
 
@@ -101,6 +104,8 @@ class DatasetAuditor:
             execution_tier: Execution tier for filtering metrics (v0.9.4).
             metric_kwargs: Optional mapping from metric name to extra
                 constructor keyword arguments (v0.9.14).
+            critical_metrics: Optional override of the critical metric list
+                used for verdict classification (v0.9.22).
         """
         self.execution_tier = execution_tier
         if episode_auditor is not None:
@@ -111,11 +116,13 @@ class DatasetAuditor:
             self.episode_auditor = EpisodeAuditor(
                 scorer=scorer, execution_tier=execution_tier,
                 metric_kwargs=metric_kwargs,
+                critical_metrics=critical_metrics,
             )
         else:
             self.episode_auditor = EpisodeAuditor(
                 execution_tier=execution_tier,
                 metric_kwargs=metric_kwargs,
+                critical_metrics=critical_metrics,
             )
 
     def audit_dataset(

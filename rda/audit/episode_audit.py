@@ -169,6 +169,7 @@ class EpisodeAuditor:
         scorer: object | None = None,
         execution_tier: object | None = None,
         metric_kwargs: Dict[str, Dict[str, Any]] | None = None,
+        critical_metrics: Sequence[str] | None = None,
     ) -> None:
         """Initialize the episode auditor.
 
@@ -186,8 +187,13 @@ class EpisodeAuditor:
                 through. This allows CLI-level options (e.g.
                 ``freeze_motion_source`` for ``video_freeze``) to
                 configure individual metrics without hard-coding them.
+            critical_metrics: Optional override of the critical metric list
+                used for verdict classification (v0.9.22). When None, the
+                default :data:`~rda.audit.rules.CRITICAL_METRICS` applies.
+                ``--pii-strict`` sets this to ``critical_with(["pii_scan"])``.
         """
         self.execution_tier = execution_tier
+        self.critical_metrics = list(critical_metrics) if critical_metrics else None
         self._metric_kwargs = metric_kwargs or {}
         if metrics is None:
             from rda.metrics import ALL_METRICS
@@ -267,7 +273,12 @@ class EpisodeAuditor:
 
         # v0.9: Rule-based verdict — only CRITICAL metrics affect verdict.
         # Diagnostic metrics produce findings but don't change the verdict.
-        verdict = classify_episode(list(metric_results.values()))
+        # v0.9.22: critical list is overridable (--pii-strict promotes
+        # pii_scan into the gate for that run only).
+        verdict = classify_episode(
+            list(metric_results.values()),
+            critical_metrics=self.critical_metrics,
+        )
 
         # v0.9: Behavior-aware verdict upgrade is now opt-in (disabled by default).
         verdict = upgrade_verdict_by_behavior(verdict, list(metric_results.values()))
@@ -278,7 +289,10 @@ class EpisodeAuditor:
 
         # Compute exclude reasons: list which L1 metrics triggered EXCLUDE.
         all_results = list(metric_results.values())
-        exclude_reasons = get_exclude_reasons(all_results) if verdict == AuditVerdict.EXCLUDE else []
+        exclude_reasons = (
+            get_exclude_reasons(all_results, critical_metrics=self.critical_metrics)
+            if verdict == AuditVerdict.EXCLUDE else []
+        )
 
         # Compute behavior severity and generate findings for explainability.
         # v0.9: Diagnostic findings are attached to diagnostic metrics' MetricResult
