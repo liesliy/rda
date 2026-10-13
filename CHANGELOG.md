@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.21 - 2026-10-13
+
+### Fixed
+- **P0-1 零内容 episode 静默 PASS**：一个有帧、但 loader 未能解析出任何 `action` / `observation` / 视频特征的 episode，此前绝大多数指标转为 N/A，`classify_episode()` 因设计上跳过非 available 结果而返回 PASS（实测 22 项指标仅 6 项 computable、0 项 finding）。现已新增 `_zero_content_guard`：该场景强制判 EXCLUDE 并给出明确原因。
+  守卫按执行档位判定"什么算可审计"：`--no-video` 下视频特征**不**计入（否则对纯视频数据集用 `--no-video` 会审计 0 项却仍报 PASS，而 `--no-video` 正是"视频未下载"场景的推荐规避手段）；`--video-only` 下机器人特征不计入。新增 `has_auditable_content()`（`rda/audit/episode_audit.py`），`EpisodeAuditResult` 新增 `has_auditable_content` 字段。
+- **P0-2 缺少「未有效审计」退出码**：此前 CLI 仅在存在 EXCLUDE 时退出 2，数据集 0 episode、或每个 episode 都无可审计内容这两种情况都返回 0，接进 CI 会被当成通过。现新增退出码 **3 = NO_EFFECTIVE_AUDIT**（检查顺序在 exit 2 之前，避免被"数据不好"掩盖"审计没跑"），并在 JSON 报告顶层新增 `audit_effective` 字段。`report_schema_version` 由 `1.2` 升为 `1.3`。修复位置 `rda/cli/main.py`、`rda/report/json_report.py`。
+
+### Removed
+- **P0-3 删除零引用死代码**：`rda/audit/rules_current.py`（319 行）与 `rda/metrics/visual_integrity_old.py`（629 行）全库无任何 import。前者 CRITICAL 名单第 7 项引用的是 `video_stream_sync`——该指标在 v0.9 已拆分为 presence / span_consistency / temporal_offset / temporal_drift 四项，名字已不存在；一旦被误引入，「整路相机丢失」闸门会静默失效。
+
+### Changed
+- **P0-4 CHANGELOG 版本日期修正**：0.9.18 原记 `2026-10-14`，晚于 0.9.19（10-02）与 0.9.20（10-08），且为未来日期。本仓库无 git 历史可查，暂按版本顺序推定为 `2026-09-30`，**待以实际发布记录核实**。
+
+### Added
+- `tests/test_zero_content_guard.py`：20 项测试钉住 P0-1 / P0-2 行为——零内容 episode 必为 EXCLUDE、正常 episode 不受影响、纯视频数据集不被误伤、0 帧守卫保持优先、档位感知（`--no-video` / `--video-only`）、`audit_effective` 与 exit 3。**任一失败即代表静默放行回归已复发。**
+
+---
+
 ## 0.9.20 - 2026-10-08
 
 ### Added
@@ -15,7 +33,11 @@
 
 ---
 
-## 0.9.18 - 2026-10-14
+## 0.9.18 - 2026-09-30
+
+> 日期说明：原记录为 `2026-10-14`，与版本顺序矛盾（0.9.19 = 2026-10-02、0.9.20 = 2026-10-08），
+> 且为未来日期。本仓库无 git 历史，真实发布日无法核实，此处按版本顺序推定，
+> 待以实际发布记录为准。
 
 ### Added
 - **Physical plausibility check** (`physical_plausibility`): new Layer 1 WARNING-level metric that checks numeric features for physically implausible values. Detects joint angles exceeding ±π (configurable), force/torque spikes, and velocity anomalies. Always returns PASS (does not affect verdict) but attaches warnings in `details["warnings"]` for diagnostic visibility. Thresholds are configurable via constructor kwargs (`angle_limit`, `force_limit`, `torque_limit`, `velocity_limit`).
