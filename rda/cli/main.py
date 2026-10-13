@@ -196,6 +196,15 @@ def audit(
       rda audit ./my_dataset --video-quality  # include visual quality checks
       rda audit ./my_dataset --no-video  # skip all video metrics
       rda audit ./my_dataset --full  # full audit with all metrics
+
+    \b
+    Exit codes:
+      0  Audited, no EXCLUDE verdicts
+      1  Usage / structural error (bad path, unreadable dataset)
+      2  At least one EXCLUDE verdict
+      3  No effective audit — no episode yielded auditable content
+         (no action / observation / video features resolved, or 0 episodes).
+         A report with exit 3 must not be read as "data is clean".
     """
     from rda.audit.dataset_audit import DatasetAuditor
     from rda.audit.execution_tier import ExecutionTier, get_tier_config
@@ -379,6 +388,22 @@ def audit(
     # --- UI flag ------------------------------------------------------------
     if launch_ui:
         _launch_streamlit_ui()
+
+    # --- P0-2 (v0.9.21): "no effective audit" must not look like success ---
+    # Checked *before* the EXCLUDE branch: when every episode resolved no
+    # auditable content they are now EXCLUDEd by the zero-content guard, and
+    # exit 2 would mask the far more actionable truth — the audit never ran.
+    if not report_dict.get("audit_effective", True):
+        click.echo(
+            "ERROR: no effective audit — no episode yielded auditable content.\n"
+            "  The loader resolved no action / observation / video features.\n"
+            "  Likely causes: unsupported schema dialect, field naming the\n"
+            "  loader does not recognise, an empty dataset, or videos that\n"
+            "  were never downloaded.\n"
+            "  This report must NOT be read as 'data is clean'.",
+            err=True,
+        )
+        sys.exit(3)
 
     # --- Exit with non-zero if any EXCLUDE verdicts -------------------------
     if summary.verdict_counts.get("EXCLUDE", 0) > 0:

@@ -53,6 +53,53 @@ _PORTABLE_TO_METRIC: Dict[str, str] = {
 }
 
 
+def has_auditable_content(
+    episode: EpisodeData,
+    execution_tier: ExecutionTier | None = None,
+) -> bool:
+    """Return True when the episode carries something RDA will actually audit.
+
+    v0.9.21 (P0-1). An episode can have frames while the loader resolved
+    neither ``action`` columns, nor ``observation.*`` columns, nor any
+    video stream. In that state most metrics return N/A, and
+    :func:`~rda.audit.rules.classify_episode` — which deliberately skips
+    non-available results — falls through to PASS. The audit silently did
+    not happen, yet the CLI exits 0.
+
+    The execution tier decides what *counts* as auditable, because it
+    decides which metrics run at all:
+
+    * ``NO_VIDEO`` — video metrics are skipped, so declared video features
+      are **not** auditable. Without this rule, running ``--no-video`` on a
+      video-only dataset (the documented workaround when videos are not
+      downloaded) would silently audit nothing and still report PASS.
+    * ``VIDEO_ONLY`` — only video metrics run, so robot features do not
+      count; a dataset with no video streams audited nothing.
+    * any other tier / ``None`` — both robot features and video features
+      are auditable.
+
+    Args:
+        episode: The episode to inspect.
+        execution_tier: Tier the audit is running under. ``None`` means
+            "no tier filtering", i.e. all metrics run.
+
+    Returns:
+        True if at least one feature class that this tier will actually
+        exercise was resolved by the loader.
+    """
+    if episode.num_frames <= 0:
+        return False
+
+    has_robot = bool(episode.action) or bool(episode.observation)
+    has_video = bool((episode.meta or {}).get("video_features"))
+
+    if execution_tier == ExecutionTier.VIDEO_ONLY:
+        return has_video
+    if execution_tier == ExecutionTier.NO_VIDEO:
+        return has_robot
+    return has_robot or has_video
+
+
 @dataclass
 class EpisodeAuditResult:
     """Result of auditing a single episode.
@@ -80,6 +127,11 @@ class EpisodeAuditResult:
         exclude_reasons: Human-readable list of metrics and reasons
             that triggered the EXCLUDE verdict. Empty when verdict is
             PASS or REVIEW.
+        has_auditable_content: Whether the loader resolved *anything*
+            auditable for this episode (action / observation / video
+            features). When False for every episode, the dataset-level
+            report sets ``audit_effective = False`` and the CLI exits 3.
+            Added in v0.9.21 (P0-1 / P0-2).
     """
 
     episode_index: int
@@ -96,6 +148,7 @@ class EpisodeAuditResult:
     has_platform_metrics: bool = False
     behavior_severity: float = 0.0
     exclude_reasons: List[str] = field(default_factory=list)
+    has_auditable_content: bool = True
 
 
 class EpisodeAuditor:
@@ -263,11 +316,77 @@ class EpisodeAuditor:
                 has_finding=True,
             )
 
+        # --- P0 fix (v0.9.21): "nothing was audited" must never look like PASS ---
+        # The 0-frame guard below catches episodes with no frames. This one
+        # catches the opposite failure: frames exist, but the loader resolved
+        # no action / observation / video features at all. Most metrics go
+        # N/A and classify_episode() — which skips N/A by design — returns
+        # PASS. The audit never happened, yet the report says PASS.
+        auditable = has_auditable_content(episode, self.execution_tier)
+        if episode.num_frames > 0 and not auditable:
+            # The wording has to match what actually happened — a guard that
+            # misstates its own trigger is worse than no guard at all.
+            if self.execution_tier == ExecutionTier.NO_VIDEO:
+                _why = (
+                    "no action/observation features were resolved and video "
+                    "metrics are disabled by --no-video; nothing was audited"
+                )
+            elif self.execution_tier == ExecutionTier.VIDEO_ONLY:
+                _why = (
+                    "no video features were resolved and --video-only skips "
+                    "all non-video metrics; nothing was audited"
+                )
+            else:
+                _why = (
+                    "no action, observation or video features were resolved — "
+                    "unsupported schema dialect, or the loader failed to map "
+                    "the data"
+                )
+            verdict = AuditVerdict.EXCLUDE
+            exclude_reasons = [
+                f"zero_content_guard (L1): Episode has frames but {_why}."
+            ]
+            metric_results["_zero_content_guard"] = MetricResult(
+                name="_zero_content_guard",
+                availability=MetricAvailability.AVAILABLE,
+                measurement={
+                    "num_frames": episode.num_frames,
+                    "n_action_keys": len(episode.action or {}),
+                    "n_observation_keys": len(episode.observation or {}),
+                    "n_video_features": len(
+                        (episode.meta or {}).get("video_features") or {}
+                    ),
+                },
+                assessment={
+                    "status": "fail",
+                    "severity": "high",
+                    "reason": (
+                        f"{_why.capitalize()}. Most metrics were not "
+                        "computable — this verdict means 'not audited', "
+                        "not 'clean'."
+                    ),
+                },
+                details={
+                    "guard": "zero_content_exclusion",
+                    "execution_tier": (
+                        self.execution_tier.value
+                        if self.execution_tier is not None
+                        else None
+                    ),
+                },
+                message=(
+                    "EXCLUDE: frames present but no auditable content resolved "
+                    "— check schema / field naming dialect."
+                ),
+                has_finding=True,
+            )
+
         # --- P0 fix (v0.4.12): 0-frame episodes must not PASS ---
         # If an episode has 0 frames (e.g. meta/data mapping mismatch),
         # the verdict is silently PASS because no metrics fire. Force EXCLUDE
         # so this failure mode is visible.
         if episode.num_frames == 0:
+            auditable = False
             verdict = AuditVerdict.EXCLUDE
             exclude_reasons = ["zero_frame_guard (L1): Episode has 0 frames — data may be missing or misaligned."]
             # Add a synthetic finding so the report explains why
@@ -300,6 +419,7 @@ class EpisodeAuditor:
             has_platform_metrics=has_platform_metrics,
             behavior_severity=behavior_severity,
             exclude_reasons=exclude_reasons,
+            has_auditable_content=auditable,
         )
 
     def __call__(self, episode: EpisodeData) -> EpisodeAuditResult:

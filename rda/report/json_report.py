@@ -152,7 +152,8 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
     report = {
         # Report SCHEMA version (layout of this JSON document), NOT the tool
         # version — bump when the report structure itself changes.
-        "report_schema_version": "1.2",
+        # 1.3 (v0.9.21): added top-level ``audit_effective``.
+        "report_schema_version": "1.3",
         "tool_version": _rda_version,
         "dataset": {
             "path": result.dataset_info.path,
@@ -169,6 +170,12 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "exclude_episodes": compact.exclude_episodes,
             "review_episodes": compact.review_episodes,
         },
+        # P0-2 (v0.9.21): did the audit actually run? When every episode
+        # resolved no action / observation / video features, the report is
+        # full of PASS/N-A and means "not audited", not "clean". Surface it
+        # as a first-class field so consumers cannot miss it; the CLI
+        # additionally exits 3 (NO_EFFECTIVE_AUDIT).
+        "audit_effective": _audit_effective(result),
         "three_layer_aggregates": {
             "layer1_integrity": dataset_metrics.get("integrity", {}),
             "layer2_temporal_motion": dataset_metrics.get("temporal_motion", {}),
@@ -193,6 +200,37 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
     }
 
     return report
+
+
+def _audit_effective(result: DatasetAuditResult) -> bool:
+    """Return True when at least one episode yielded auditable content.
+
+    P0-2 (v0.9.21). Three failure modes previously produced a clean-looking
+    report with exit code 0:
+
+    1. the dataset has zero episodes;
+    2. every episode has zero frames (already forced to EXCLUDE by the
+       0-frame guard, so it can no longer masquerade as PASS);
+    3. every episode has frames but no resolved action / observation /
+       video features — all metrics go N/A and ``classify_episode()``
+       returns PASS by design.
+
+    All three mean "the audit did not happen". This flag — together with
+    CLI exit code 3 — makes that distinguishable from "audited and clean".
+
+    Returns:
+        False when there are no episodes, or when no episode has
+        auditable content. True otherwise.
+    """
+    episodes = getattr(result, "episodes", None) or {}
+    if not episodes:
+        return False
+    # Default True keeps older result shapes (no such attribute) from
+    # being misreported as ineffective — same defensive rule used by
+    # ``skipped_by_missing_dep``.
+    return any(
+        getattr(ep, "has_auditable_content", True) for ep in episodes.values()
+    )
 
 
 def skipped_by_missing_dep(result: DatasetAuditResult) -> Dict[str, int]:

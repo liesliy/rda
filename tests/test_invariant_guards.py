@@ -466,7 +466,8 @@ class TestINV006ReportVersionTrace:
         assert "report_schema_version" in report, (
             "INV-006: report missing 'report_schema_version' field"
         )
-        assert report["report_schema_version"] == "1.2", (
+        # v0.9.21: bumped 1.2 → 1.3 with the new top-level `audit_effective`.
+        assert report["report_schema_version"] == "1.3", (
             f"INV-006: unexpected schema version {report['report_schema_version']}"
         )
 
