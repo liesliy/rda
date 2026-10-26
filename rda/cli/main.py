@@ -606,6 +606,269 @@ def example() -> None:
 
 
 # ---------------------------------------------------------------------------
+# conform subcommand (v0.10.0)
+# ---------------------------------------------------------------------------
+
+def _parse_workspace_bounds(text: Optional[str]):
+    """Parse ``--workspace-bounds`` into (bounds6, max_distance).
+
+    Accepts either:
+      * ``"xmin,xmax,ymin,ymax,zmin,zmax"`` — Cartesian workspace bounds; the
+        feasible-space max distance is then the box diagonal;
+      * ``"d=<float>"`` — the max distance declared directly.
+
+    Anything else is a usage error: the value feeds a standard threshold, so
+    guessing would put a fabricated number into the report.
+    """
+    import re
+
+    if text is None or not str(text).strip():
+        return None, None
+    s = str(text).strip()
+    m = re.match(r"^(?:d|dist|max_distance)\s*=\s*([+-]?[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)$", s)
+    if m:
+        return None, float(m.group(1))
+    parts = [p.strip() for p in s.replace(";", ",").split(",") if p.strip()]
+    try:
+        vals = [float(p) for p in parts]
+    except ValueError:
+        raise ValueError(
+            f"--workspace-bounds 需要 6 个数 'xmin,xmax,ymin,ymax,zmin,zmax'，"
+            f"或 'd=<最大距离>'；无法解析：{text!r}"
+        ) from None
+    if len(vals) != 6:
+        raise ValueError(
+            f"--workspace-bounds 需要 6 个数 'xmin,xmax,ymin,ymax,zmin,zmax'，"
+            f"实际给了 {len(vals)} 个：{text!r}"
+        )
+    return vals, None
+
+
+@cli.command(
+    "conform",
+    short_help="Conformance assessment against GB/Z 218.1-2026.",
+)
+@click.argument(
+    "dataset",
+    type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
+)
+@click.option(
+    "--standard",
+    "standard",
+    type=click.Choice(["gbz218.1-2026"], case_sensitive=False),
+    default="gbz218.1-2026",
+    show_default=True,
+    help="Standard to assess against. Only GB/Z 218.1-2026 ships in v0.10.0.",
+)
+@click.option(
+    "--profile",
+    "profile_path",
+    type=click.Path(exists=False, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "JSON profile overriding individual thresholds. Keys are the same "
+        "names as in rda/conform/standards/gbz218_1.py; omitted entries "
+        "keep the standard's own value."
+    ),
+)
+@click.option(
+    "--workspace-bounds",
+    "workspace_bounds",
+    type=str,
+    default=None,
+    help=(
+        "Feasible-space declaration required by 6.2.3.4 a. Either "
+        "'xmin,xmax,ymin,ymax,zmin,zmax' or 'd=<max distance>'. "
+        "Without it the Hausdorff check stays UNDETERMINED."
+    ),
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["md", "json"], case_sensitive=False),
+    default="md",
+    show_default=True,
+    help="Output format of the conformance report.",
+)
+@click.option(
+    "--out",
+    "out_dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Directory to write the report into. Defaults to the current directory.",
+)
+@click.option(
+    "--strict-coverage",
+    "strict_coverage",
+    is_flag=True,
+    default=False,
+    help=(
+        "Request the coverage gate. NOTE: the gate is a stub in v0.10.0 — "
+        "it records the request and the coverage number but does not gate "
+        "anything yet, so it never triggers exit code 3."
+    ),
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Enable verbose output.",
+)
+def conform(
+    dataset: Path,
+    standard: str,
+    profile_path: Optional[Path],
+    workspace_bounds: Optional[str],
+    output_format: str,
+    out_dir: Optional[Path],
+    strict_coverage: bool,
+    verbose: bool,
+) -> None:
+    """Assess a dataset against GB/Z 218.1-2026 and issue four-state verdicts.
+
+    Unlike 'rda audit' (which asks "is this data any good?"), 'rda conform'
+    asks "does this data meet the standard?" — every judgement is tied to a
+    numbered clause and a binding ("应" mandatory / "宜" advisory), and the
+    result is one of four states:
+
+    \b
+      PASS            meets the threshold
+      FAIL            violates the threshold (both 应 and 宜)
+      NOT_APPLICABLE  clause does not apply / standard asks for output only
+      UNDETERMINED    inputs missing — never silently reported as PASS
+
+    \b
+    Examples:
+      rda conform /path/to/lerobot/dataset
+      rda conform ./ds --format json --out ./reports
+      rda conform ./ds --workspace-bounds "-0.5,0.5,-0.5,0.5,0.0,0.6"
+      rda conform ./ds --profile my_thresholds.json
+
+    \b
+    Exit codes:
+      0  No FAIL at all (PASS / NOT_APPLICABLE / UNDETERMINED only)
+      1  At least one FAIL. 应-class violations are counted as
+         mandatory_fail, 宜-class violations as advisory_fail; both exit 1,
+         so a FAIL can never be mistaken for a clean run.
+      2  Execution error (bad path, unreadable dataset, bad profile)
+      3  Coverage gate tripped — STUB in v0.10.0, never returned yet
+    """
+    from rda.conform import (
+        ConformOptions,
+        build_conformance_node,
+        load_profile,
+        render_conformance_markdown,
+        run_conformance,
+    )
+
+    path_str = str(dataset)
+
+    if not dataset.exists():
+        click.echo(f"Error: Path does not exist: {path_str}", err=True)
+        sys.exit(2)
+    if not dataset.is_dir():
+        click.echo(f"Error: Path is not a directory: {path_str}", err=True)
+        sys.exit(2)
+
+    # --- profile -----------------------------------------------------------
+    try:
+        profile = load_profile(profile_path)
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(2)
+    except ValueError as e:
+        click.echo(f"Error: invalid profile: {e}", err=True)
+        sys.exit(2)
+
+    # --- workspace bounds --------------------------------------------------
+    try:
+        bounds, max_distance = _parse_workspace_bounds(workspace_bounds)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(2)
+    options = ConformOptions(
+        workspace_bounds=bounds,
+        workspace_max_distance=max_distance,
+        strict_coverage=strict_coverage,
+    )
+
+    if verbose:
+        click.echo(f"Dataset : {path_str}")
+        click.echo(f"Standard: {standard}")
+        click.echo(f"Profile : {profile.source or 'built-in defaults'}")
+        if max_distance is not None:
+            click.echo(f"Feasible-space max distance: {max_distance}")
+        click.echo("")
+
+    # --- run ---------------------------------------------------------------
+    try:
+        result = run_conformance(path_str, profile=profile, options=options)
+    except Exception as e:
+        click.echo(f"Error: conformance assessment failed: {e}", err=True)
+        sys.exit(2)
+
+    # --- render ------------------------------------------------------------
+    if output_format.lower() == "json":
+        import json as _json
+
+        payload = build_conformance_node(result)
+        text = _json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+        filename = f"conformance_report_{standard}.json"
+    else:
+        text = render_conformance_markdown(result)
+        filename = f"conformance_report_{standard}.md"
+
+    click.echo(text)
+
+    target_dir = Path(out_dir) if out_dir is not None else Path.cwd()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        out_file = target_dir / filename
+        out_file.write_text(text, encoding="utf-8")
+        click.echo(f"\nReport saved to: {out_file}")
+    except OSError as e:
+        click.echo(f"Warning: could not write report: {e}", err=True)
+
+    # --- gates -------------------------------------------------------------
+    summary = result.summary
+    if summary["undetermined_metrics"]:
+        tail = ""
+        if summary["fail"] == 0:
+            # 最容易踩的坑：没有 FAIL → 退出码 0，但报告里躺着若干"没查"的项。
+            # 退出码 0 被 CI 读成"干净通过"，而报告其实不足以宣称符合，
+            # 必须把这句话说在明面上。
+            tail = (
+                " —— 本次无 FAIL，退出码为 0；但存在未裁定项，本份报告"
+                "不足以宣称该数据集「符合」标准（UNDETERMINED 不是 PASS）。"
+            )
+        click.echo(
+            "Note: UNDETERMINED (not judged, NOT a pass): "
+            + ", ".join(summary["undetermined_metrics"]) + tail,
+            err=True,
+        )
+    if strict_coverage:
+        click.echo(
+            "Note: --strict-coverage requested, but the coverage gate is a "
+            "stub in v0.10.0 (TODO: define the threshold and gate semantics). "
+            f"coverage={summary['coverage']} recorded, no gate applied.",
+            err=True,
+        )
+    if summary["mandatory_fail"] > 0:
+        click.echo(
+            f"FAIL: {summary['mandatory_fail']} mandatory (应) clause(s) violated.",
+            err=True,
+        )
+        sys.exit(1)
+    if summary["fail"] > 0:
+        click.echo(
+            f"FAIL: {summary['advisory_fail']} advisory (宜) clause(s) violated.",
+            err=True,
+        )
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # recommend subcommand
 # ---------------------------------------------------------------------------
 
