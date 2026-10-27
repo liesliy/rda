@@ -1357,6 +1357,23 @@ def _resolve_video_file(view, feature: str, file_index: Optional[int]) -> Option
     return None
 
 
+def _aggregate_robust(
+    parts: List[np.ndarray], errors: Optional[List[np.ndarray]] = None
+) -> Dict[str, Any]:
+    """Concatenate per-pair samples and summarize them (displacements + errs).
+
+    残差数组必须与位移数组**逐点对齐**才能给出 ``track_err_at_max``；对不上
+    （理论上不该发生）时按"残差不可用"处理，返回 None 而不是猜一个值。
+    """
+    if not parts:
+        return summarize_displacements(None)
+    disp = np.concatenate(parts)
+    if not errors:
+        return summarize_displacements(disp)
+    errs = np.concatenate(errors)
+    return summarize_displacements(disp, errs if errs.size == disp.size else None)
+
+
 def _spectral_flux(samples: np.ndarray, nperseg: int = SF_NPERSEG,
                    hop: int = SF_HOP) -> np.ndarray:
     """附录 A.2 公式 A.2：``SF(t) = Σ_k ( |X_k(t)| − |X_k(t−1)| )``。
@@ -1502,6 +1519,7 @@ def _measure_video_layer(view, profile: ConformProfile, options) -> Dict[str, An
             n_pairs_requested=len(cam_eps) * s.video_frame_pairs,
         )
         per_cam: List[np.ndarray] = []
+        cam_errs: List[np.ndarray] = []
         for ep in cam_eps:
             win = windows.get(feature, {}).get(ep)
             from_ts, to_ts, file_index = win
@@ -1525,6 +1543,7 @@ def _measure_video_layer(view, profile: ConformProfile, options) -> Dict[str, An
             cam.n_frames_decoded += ps.n_frames_decoded
             cam.n_episodes_used += 1
             ep_vals: List[np.ndarray] = []
+            ep_errs: List[np.ndarray] = []
             ep_valid = 0
             ep_total = 0
             for pair in ps.pairs:
@@ -1533,15 +1552,23 @@ def _measure_video_layer(view, profile: ConformProfile, options) -> Dict[str, An
                 cam.n_valid_points += res.n_valid
                 ep_total += res.n_features
                 ep_valid += res.n_valid
+                # 分辨率与"剔除门限的实际 px 值"要跟着一起记录：只给比例
+                # 0.10 读者看不出这条线有多松（640×480 下是 80 px）。
+                if res.image_shape != (0, 0):
+                    cam.frame_shape = f"{res.image_shape[1]}×{res.image_shape[0]}"
+                    cam.diagonal_px = res.diagonal_px
+                    cam.reject_limit_px = DIAG_REJECT_RATIO * res.diagonal_px
                 if res.n_valid < MIN_VALID_POINTS_PER_PAIR:
                     # 有效点太少说明这一对的跟踪结果不可信：整对剔除（并计数）
                     cam.n_pairs_rejected += 1
                     continue
                 cam.n_pairs_used += 1
                 per_cam.append(res.displacements)
+                cam_errs.append(res.track_errors)
                 ep_vals.append(res.displacements)
+                ep_errs.append(res.track_errors)
             if ep_vals:
-                agg_ep = summarize_displacements(np.concatenate(ep_vals))
+                agg_ep = _aggregate_robust(ep_vals, ep_errs)
                 cam.episodes.append({
                     "episode": ep, "fps": ps.fps,
                     "start_sec": ps.start_sec,
@@ -1551,12 +1578,23 @@ def _measure_video_layer(view, profile: ConformProfile, options) -> Dict[str, An
                     "n_valid_points": ep_valid, "n_total_points": ep_total,
                     "mean": agg_ep["mean"], "p50": agg_ep["p50"],
                     "p95": agg_ep["p95"], "max": agg_ep["max"],
+                    "p99_9": agg_ep["p99_9"], "n_above_p99": agg_ep["n_above_p99"],
+                    "track_err_p50": agg_ep["track_err_p50"],
+                    "track_err_p95": agg_ep["track_err_p95"],
+                    "track_err_at_max": agg_ep["track_err_at_max"],
+                    "max_is_single_point": True,
                 })
         if per_cam:
-            agg = summarize_displacements(np.concatenate(per_cam))
+            agg = _aggregate_robust(per_cam, cam_errs)
             cam.n_valid_points = int(cam.n_valid_points)
             cam.mean, cam.p50 = agg["mean"], agg["p50"]
             cam.p95, cam.max = agg["p95"], agg["max"]
+            cam.p99, cam.p99_9 = agg["p99"], agg["p99_9"]
+            cam.n_above_p99 = agg["n_above_p99"]
+            cam.track_err_p50 = agg["track_err_p50"]
+            cam.track_err_p95 = agg["track_err_p95"]
+            cam.track_err_at_max = agg["track_err_at_max"]
+            cam.track_err_n = agg["track_err_n"]
         else:
             cam.notes.append("该路相机没有产出任何有效帧对")
         out["cameras"].append(cam)
@@ -1578,6 +1616,36 @@ def _measure_video_layer(view, profile: ConformProfile, options) -> Dict[str, An
         out["status"] = "NO_DATA"
     _VIDEO_CACHE[key] = out
     return out
+
+
+def _reject_rule_text(cameras: Sequence[CameraMotionStats]) -> str:
+    """Describe the rejection rule together with its **actual px threshold**.
+
+    只写"对角线 × 0.10"是不够的：读者看不出这条线有多松。640×480 下它就是
+    80 px —— 一个跑飞了 75 px 的点会安然通过。所以这里把实际门限和"按此剔除
+    了多少点"一并写出来，让这条判据的松紧程度可被第三方直接检验。
+    """
+    text = (
+        f"status == 1 且位移 < 图像对角线 × {DIAG_REJECT_RATIO:g}；"
+        f"单帧对有效点少于 {MIN_VALID_POINTS_PER_PAIR} 个则整对剔除。"
+    )
+    per_cam = []
+    for cam in cameras:
+        if cam.reject_limit_px is None:
+            continue
+        per_cam.append(
+            f"{cam.feature}（{cam.frame_shape}，对角线 {cam.diagonal_px:.2f} px"
+            f" → 门限 {cam.reject_limit_px:.2f} px，本次按判据剔除 "
+            f"{cam.n_total_points - cam.n_valid_points} / {cam.n_total_points} 点）"
+        )
+    if per_cam:
+        text += "实际门限：" + "；".join(per_cam) + "。"
+    text += (
+        "**这条判据只是'跟踪彻底跑飞'的兜底线，不是'跟得准'的门槛**——门限"
+        "通常在几十 px 量级，个位数 px 的跟踪野值不会触发它，因此本报告额外"
+        "给出 p99.9、逐点 LK 残差 err 与剔除点数，供第三方判断尾部值是否可信。"
+    )
+    return text
 
 
 def _appendix_a_optical_flow(view, profile: ConformProfile, options) -> Dict[str, Any]:
@@ -1603,11 +1671,7 @@ def _appendix_a_optical_flow(view, profile: ConformProfile, options) -> Dict[str
             "算法为 Lucas-Kanade 金字塔光流（附录 A.1 明文允许）。"
         ),
         "percentile_method": "numpy.percentile，线性插值（method='linear'）",
-        "reject_rule": (
-            f"status==1 且位移 < 图像对角线×{DIAG_REJECT_RATIO:g}；"
-            f"单帧对有效点少于 {MIN_VALID_POINTS_PER_PAIR} 个则整对剔除。"
-            f"剔除数与解码失败数均在上方各相机的字段里披露。"
-        ),
+        "reject_rule": _reject_rule_text(m["cameras"]),
         "note": (
             "标准只对评价方法提要求（7.2.6 a），不设数据阈值，故本项**不产 "
             "PASS/FAIL**，仅输出位移统计供第三方复核。"
@@ -1834,6 +1898,22 @@ def check_motion_blur_kernel_px(view, profile: ConformProfile,
           "失效场景：滚动快门（逐行曝光使同一帧各行的有效 α 不同）、"
           "剧烈非匀速运动或碰撞回弹、遮挡边界处的粗大运动，以及相机自运动与"
           "被跟踪物体运动不可分离时，光流位移不再构成该点模糊核长度的上界。"
+          "**大位移时 LK 会系统性低估**（这是方法边界，见下方自测数据）。"
+          "自测配置：320×240 / 16 帧整体平移的合成单调对照视频（libx264 无损，"
+          "Shi-Tomasi 角点 + winSize 15×15 / maxLevel 3 的金字塔 LK）。"
+          "位移真值 0.5–16 px 时 p50/p95 与真值相差 ≤ 0.001 px；"
+          "24 px 起尾部失真（p50 = 24.000 仍准，但 p95 = 40.000）；"
+          "48 px 时 p50 = 24.145、p95 = 32.522，即系统性低估到真值的 50%–"
+          "68%，同时 15 个帧对只剩 1 个可用（特征目标移出画面导致角点丢失）。"
+          "失真方向**不会造成假合格结论**：真实位移越大，报出的 p95 越偏离但"
+          "不会回到 5 px 以下（48 px 仍报 32.5 > 5）；再大则整帧无可用角点 → "
+          "UNDETERMINED。但**该量级的 p95 不可用于绝对标定或定量复核**，只能"
+          "用于与 5 px 限值的比较；需要标定级数值时应换用不依赖局部 patch 的"
+          "方法。上述起偏点与 winSize/纹理/分辨率相关，换个配置数值会不同。"
+          "另外：报告中的 max 是全部有效点的**单点极值**（曾实测到单个跟踪点"
+          " 75.04 px 而同帧其余 199 点最大仅 10.02 px、该点 LK 残差 err = "
+          "66.74），易受跟踪野值影响，**复核请以 p95 / p99.9 为准**，"
+          "并核对逐点残差 track_err。"
           "**不使用 Laplacian 方差等清晰度代理指标**：它们不能区分散焦与运动"
           "拖尾，与 5 px 阈值比较即为方法不符。"
     )

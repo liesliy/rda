@@ -220,14 +220,38 @@ def render_conformance_markdown(result: ConformanceResult,
     cams = flow.get("cameras") or []
     if cams:
         add("")
-        add("| 相机 | fps | p50 (px) | p95 (px) | max (px) | 有效点/总点 | 帧对(用/剔) | 解码帧数 |")
-        add("|---|---|---|---|---|---|---|---|")
+        # max 列特意标 ⚠：它是单点极值，单独引用会误导复核（见下方脚注）
+        add("| 相机 | 分辨率 | fps | p50 (px) | p95 (px) | p99.9 (px) | "
+            "max (px) ⚠ | n>P99 | LK 残差 err p50/p95/该max点 | "
+            "有效点/总点 | 帧对(用/剔) | 解码帧数 |")
+        add("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for c in cams:
             d = c.get("displacement_px") or {}
-            add(f"| `{c['feature']}` | {_fmt_value(c.get('fps'))} | "
+            te = c.get("track_err") or {}
+            add(f"| `{c['feature']}` | {c.get('frame_shape') or '—'} | "
+                f"{_fmt_value(c.get('fps'))} | "
                 f"{_fmt_value(d.get('p50'))} | {_fmt_value(d.get('p95'))} | "
-                f"{_fmt_value(d.get('max'))} | {c['n_valid_points']}/{c['n_total_points']} | "
+                f"{_fmt_value(d.get('p99_9'))} | {_fmt_value(d.get('max'))} | "
+                f"{d.get('n_above_p99', 0)} | "
+                f"{_fmt_value(te.get('p50'))} / {_fmt_value(te.get('p95'))} / "
+                f"{_fmt_value(te.get('at_max'))} | "
+                f"{c['n_valid_points']}/{c['n_total_points']} | "
                 f"{c['n_pairs_used']}/{c['n_pairs_rejected']} | {c['n_frames_decoded']} |")
+        add("")
+        add("**列口径说明（第三方请以这些为准阅读上表）**：")
+        add("")
+        add("- **max (px) ⚠ 是单点极值，不是稳健统计量**：它取全部有效跟踪点里"
+            "的**单一最大值**，一个跟丢的点就能把它抬到整帧真实运动的好几倍，"
+            "**不得单独引用**。")
+        add("- 判定用的是 **p95**（保守口径），复核的稳健上界请看 **p99.9**，"
+            "尾部点的可信程度请看 **LK 残差 err** —— `err` 是 "
+            "`cv2.calcOpticalFlowPyrLK` 对每个点返回的 patch SSD 残差，本工具"
+            "**只用其披露、不用其剔除**（没有依据给 err 划一条'多大算坏'的线）。"
+            "最后一列给出产生 max 的那个点自身的残差，数值远高于 p50 时即可"
+            "判断该 max 是跟踪野值。")
+        add("- `n>P99` = 超过该相机 p99 的点数，用于判断尾部到底是'一小撮野值'"
+            "还是'确实存在一个运动的子集'。")
+        add("")
         # 剔除原因必须逐条披露：静默丢点会让 statistic 失去可复算性
         for c in cams:
             if c.get("decode_errors") or c.get("notes"):
@@ -240,17 +264,20 @@ def render_conformance_markdown(result: ConformanceResult,
             if eps:
                 add("")
                 add(f"  `{c['feature']}` 逐 episode 明细（抽样到第几个 episode "
-                    f"必须可核对，不能只给一个聚合值）：")
+                    f"必须可核对，不能只给一个聚合值；max 列同上方口径，为单点极值）：")
                 add("")
                 add("  | episode | 载荷文件 | 窗口起点(s) | 解码帧数 | 帧对 | "
-                    "有效点/总点 | p50 | p95 | max |")
-                add("  |---|---|---|---|---|---|---|---|---|")
+                    "有效点/总点 | p50 | p95 | p99.9 | max ⚠ | err p50 | err@max |")
+                add("  |---|---|---|---|---|---|---|---|---|---|---|")
                 for e in eps:
                     add(f"  | {e['episode']} | {e['file']} | "
                         f"{_fmt_value(e.get('start_sec'))} | {e['n_frames_decoded']} | "
                         f"{e['n_pairs_used']} | {e['n_valid_points']}/{e['n_total_points']} | "
                         f"{_fmt_value(e['p50'])} | {_fmt_value(e['p95'])} | "
-                        f"{_fmt_value(e['max'])} |")
+                        f"{_fmt_value(e.get('p99_9'))} | {_fmt_value(e['max'])} | "
+                        f"{_fmt_value(e.get('track_err_p50'))} | "
+                        f"{_fmt_value(e.get('track_err_at_max'))} |")
+                add("")
     else:
         add("- 每路相机的位移统计：**无**（见上方状态与 note）")
     for n in flow.get("notes") or []:

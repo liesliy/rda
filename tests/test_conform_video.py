@@ -306,6 +306,66 @@ def test_stream_fps_never_guesses():
     assert stream_fps(_GoodRate()) == pytest.approx(30.0)
 
 
+def test_robust_upper_bound_is_reported_alongside_max(tmp_path: Path,
+                                                      encoder_name: str):
+    """max 是单点极值；p99.9 / n_above_p99 必须一并给出，让野值可辨识。
+
+    背景（真实缺陷）：lerobot_folding 的 full 模式曾报出 max = 75.0426 px，
+    而同帧其余 199 个点最大只有 10.02 px —— 只有一个点，却进了正式报告。
+    判定不受影响（用 p95），但第三方复核会读错，因此必须披露而非掩盖。
+    """
+    s = summarize_displacements(list(np.zeros(999)) + [75.0])
+    assert s["max"] == pytest.approx(75.0)         # 单点极值：读起来像"有 75 px 的运动"
+    assert s["p99_9"] == pytest.approx(0.075)      # 稳健上界：线性插值，几乎不受那一点影响
+    assert s["p95"] == pytest.approx(0.0)
+    assert s["n"] == 1000
+    # 超过 p99 的点数只有 1 个 —— 一眼看出尾部是"一个野值"而不是"一群点"
+    assert s["n_above_p99"] == 1
+
+
+def test_lk_track_error_is_captured_not_discarded(tmp_path: Path,
+                                                  encoder_name: str):
+    """`calcOpticalFlowPyrLK` 的第三个返回值（逐点残差）必须被接出来。
+
+    它此前被 `_err` 接收后丢弃。这次的要求是**披露**：不给 err 设任何魔法
+    阈值（我们没有依据），只把它连同统计量报出去。
+    """
+    truth = make_translation_video(tmp_path / "err.mp4", n_frames=16,
+                                   shift_px=3.0, encoder=encoder_name)
+    probe = VideoProbe()
+    ps = probe.read_consecutive_pairs(truth["path"], 0.0,
+                                      truth["n_frames"] / truth["fps"],
+                                      n_pairs=8)
+    res = lk_displacement(*ps.pairs[0])
+    assert res.n_valid > 0
+    # 残差必须与位移**逐点对齐**，否则 err@max 那条证据就是错位的
+    assert res.track_errors.shape == res.displacements.shape
+    assert np.isfinite(res.track_errors).all()
+    # 合成平移是干净的：残差应当接近 0
+    assert float(np.median(res.track_errors)) < 1.0
+
+
+def test_track_err_at_max_points_at_the_outlier():
+    """err@max = 产生 max 的那个点自己的残差——复核单点野值时最直接的证据。"""
+    disp = [1.0, 1.0, 2.0, 75.0]
+    errs = [0.01, 0.02, 0.03, 66.74]
+    s = summarize_displacements(disp, errs)
+    assert s["max"] == pytest.approx(75.0)
+    assert s["p99_9"] == pytest.approx(74.781)  # 4 个点，线性插值
+    assert s["track_err_at_max"] == pytest.approx(66.74)
+    assert s["track_err_p50"] == pytest.approx(0.025)
+    assert s["track_err_n"] == 4
+
+
+def test_missing_track_error_is_nan_not_zero():
+    """残差不可用（长度对不上 / OpenCV 没返回）时必须表现为缺失，不许用 0 冒充。"""
+    s = summarize_displacements([1.0, 2.0, 3.0], [0.1])  # 长度对不上
+    assert s["n"] == 3                     # 位移本身照样统计
+    assert s["track_err_p50"] is None      # 残差按缺失处理
+    assert s["track_err_at_max"] is None
+    assert s["track_err_n"] == 0
+
+
 def test_summarize_empty_sample_is_none_not_zero():
     """空样本返回 None（→ UNDETERMINED），绝不返回 0（→ 会被误读成 PASS）。"""
     s = summarize_displacements(np.zeros((0,), dtype=float))

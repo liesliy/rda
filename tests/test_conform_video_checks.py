@@ -376,6 +376,40 @@ def _node_item(node: dict, metric: str) -> dict:
     raise AssertionError(f"metric {metric!r} not in node")
 
 
+def test_report_flags_max_as_single_point_and_gives_real_threshold(tmp_path: Path):
+    """max 必须被标成单点极值，剔除规则必须写出**实际 px 门限**。
+
+    只写"对角线 × 0.10"读者看不出这条线有多松；只给 max 不给提示，第三方
+    会把 15 万点里的 1 个野值读成"存在 75 px 的帧间位移"。
+    """
+    ds = dataset_with_real_video(tmp_path / "t", SHIFT_SMALL)
+    result = run_conformance(ds)
+    cam = result.observations["appendix_a_optical_flow"]["cameras"][0]
+    # --- 结构化证据（JSON 节点）-------------------------------------------
+    assert cam["displacement_px"]["p99_9"] is not None
+    # n_above_p99 与其余分位数同在 displacement_px 段里：曾因放在顶层而让报告
+    # 恒为 0（真实数据上应为 153/15262），故一并钉住键的位置与类型。
+    assert isinstance(cam["displacement_px"]["n_above_p99"], int)
+    assert isinstance(cam["displacement_px"]["p99"], float)
+    assert cam["track_err"]["n"] > 0            # LK 残差被接出来了，没丢
+    assert cam["track_err"]["p50"] is not None
+    assert cam["frame_shape"] == "320×240"
+    # 320×240 → 对角线 400 px → 门限 40.00 px
+    assert cam["reject_limit_px"] == pytest.approx(40.0)
+    assert cam["diagonal_px"] == pytest.approx(400.0)
+
+    # --- 报告正文 ---------------------------------------------------------
+    md = render_conformance_markdown(result)
+    assert "单点极值" in md                      # max 列脚注
+    assert "p99.9" in md
+    assert "max (px) ⚠" in md
+    assert "40.00 px" in md                      # 剔除门限的实际数值
+    assert "不是'跟得准'的门槛" in md or "不是「跟得准」的门槛" in md
+    assert "LK 残差" in md
+    # 逐 episode 明细同样要给 err@max 与 p99.9
+    assert "err@max" in md
+
+
 def test_cli_video_off_leaves_the_item_undetermined(tmp_path: Path):
     ds = dataset_with_real_video(tmp_path / "p", SHIFT_SMALL)
     node = _cli_node(tmp_path / "off", ds, "--video=off")

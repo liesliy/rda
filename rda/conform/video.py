@@ -111,7 +111,14 @@ class FlowPairResult:
         n_rejected_displacement: status 通过但位移 ≥ 对角线的
             ``DIAG_REJECT_RATIO`` 倍、或位移非有限值的点数。
         displacements: ``n_valid`` 个有效点的位移范数（px）。
+        track_errors: 与 ``displacements`` **逐点对齐**的 LK 跟踪残差
+            （``calcOpticalFlowPyrLK`` 的第三个返回值，即两帧 patch 的 SSD
+            残差）。它是**质量指示量，不是剔除依据**：我们没有依据给 err 划
+            一条"多大算坏"的线——凭空设一个阈值就是把猜测写成判据。取而代之
+            把它如实报出来，第三方才能看到"那个孤立的 max 点自己也知道跟不
+            住"。OpenCV 未返回该值时为全 NaN（统计时按缺失处理）。
         diagonal_px: 图像对角线长度（px），即可靠性判据的分母。
+        image_shape: ``(height, width)``。
         note: 形状不匹配等整帧退化的说明。
     """
 
@@ -120,6 +127,8 @@ class FlowPairResult:
     n_rejected_status: int = 0
     n_rejected_displacement: int = 0
     displacements: np.ndarray = field(
+        default_factory=lambda: np.zeros((0,), dtype=np.float64))
+    track_errors: np.ndarray = field(
         default_factory=lambda: np.zeros((0,), dtype=np.float64))
     diagonal_px: float = 0.0
     image_shape: Tuple[int, int] = (0, 0)
@@ -178,6 +187,18 @@ class CameraMotionStats:
     p50: Optional[float] = None
     p95: Optional[float] = None
     max: Optional[float] = None
+    # --- 稳健上界与质量指示量（v0.11.0 修订：max 是单点极值，不可单独引用）--
+    p99: Optional[float] = None
+    p99_9: Optional[float] = None
+    n_above_p99: int = 0
+    track_err_p50: Optional[float] = None
+    track_err_p95: Optional[float] = None
+    track_err_at_max: Optional[float] = None
+    track_err_n: int = 0
+    # 剔除判据的**实际门限**（px）与分辨率：光有比例看不出这条线有多松。
+    frame_shape: str = ""
+    diagonal_px: Optional[float] = None
+    reject_limit_px: Optional[float] = None
     notes: List[str] = field(default_factory=list)
     decode_errors: List[str] = field(default_factory=list)
     # 逐 episode 明细：第三方复核要能定位到"第几个 episode 的多少帧"，
@@ -202,7 +223,24 @@ class CameraMotionStats:
             "displacement_px": {
                 "mean": self.mean, "p50": self.p50,
                 "p95": self.p95, "max": self.max,
+                "p99": self.p99, "p99_9": self.p99_9,
+                "n_above_p99": self.n_above_p99,
             },
+            # 质量指示量，不是剔除依据：没有依据给 err 划阈值，只披露。
+            "track_err": {
+                "n": self.track_err_n,
+                "p50": self.track_err_p50,
+                "p95": self.track_err_p95,
+                "at_max": self.track_err_at_max,
+                "meaning": (
+                    "calcOpticalFlowPyrLK 返回的每点 SSD 残差；数值越大说明该点"
+                    "的局部 patch 在两帧间越不匹配（可能跟丢）。本工具不据此"
+                    "剔除任何点，仅供第三方判断尾部点是否可信。"
+                ),
+            },
+            "frame_shape": self.frame_shape,
+            "diagonal_px": self.diagonal_px,
+            "reject_limit_px": self.reject_limit_px,
             "notes": list(self.notes),
             "decode_errors": list(self.decode_errors),
             "episodes": list(self.episodes),
@@ -462,6 +500,12 @@ def lk_displacement(
       1. ``calcOpticalFlowPyrLK`` 返回的 ``status == 1``；
       2. 位移范数有限且 < ``diag_ratio`` × 图像对角线。
 
+    必须清楚这条判据的**松紧程度**：它是一条"跟踪彻底跑飞"的兜底线，不是
+    "跟得准"的门槛——640×480 的门限是 800 × 0.10 = 80 px，一个跑了 75 px 的
+    单点野值会安然落在保留区。残量较小的野值不靠这条线拦，而是靠
+    :func:`summarize_displacements` 给出的 p99.9 / max 与逐点残差**披露**
+    出来：**判定用 p95，复核看 p99.9，不建议读 max**。
+
     Returns:
         :class:`FlowPairResult`。剔除数一律回填到结果里，供报告披露。
     """
@@ -481,7 +525,7 @@ def lk_displacement(
         return base
     pts0 = features.reshape(-1, 2).astype(np.float32)
     base.n_features = int(pts0.shape[0])
-    pts1, status, _err = cv2.calcOpticalFlowPyrLK(
+    pts1, status, track_err = cv2.calcOpticalFlowPyrLK(
         gray_a, gray_b, features, None,
         winSize=LK_WIN_SIZE, maxLevel=LK_MAX_LEVEL,
         criteria=LK_CRITERIA,
@@ -497,27 +541,98 @@ def lk_displacement(
     base.n_rejected_status = int((~ok_status).sum())
     base.n_rejected_displacement = int((ok_status & ~within).sum())
     base.displacements = np.asarray(disp[valid], dtype=np.float64)
+    # 残差与原位移同序，这里按 valid 掩码取同一批点。取不到（后端没返回）时
+    # 填 NaN——"拿不到"必须表现为缺失，不许用 0 冒充"跟得完美"。
+    if track_err is None:
+        errs = np.full(disp.shape, np.nan, dtype=np.float64)
+    else:
+        flat = np.asarray(track_err, dtype=np.float64).reshape(-1)
+        errs = flat if flat.shape[0] == disp.shape[0] else \
+            np.full(disp.shape, np.nan, dtype=np.float64)
+    base.track_errors = errs[valid]
     return base
 
 
-def summarize_displacements(values: Optional[Sequence[float] | np.ndarray]
-                            ) -> Dict[str, Any]:
-    """Aggregate displacement norms into count + mean/p50/p95/max.
-
-    百分位用 **线性插值**（``numpy.percentile`` 默认 ``method="linear"``），
-    报告里要把插值方法写出来，否则第三方无法复算同一个数。空样本返回全 None
-    且 ``n == 0``——调用方据此判 UNDETERMINED，不许当成 0 去凑阈值。
-    """
-    if values is None:
-        return {"n": 0, "mean": None, "p50": None, "p95": None, "max": None}
-    arr = np.asarray(values, dtype=np.float64)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return {"n": 0, "mean": None, "p50": None, "p95": None, "max": None}
+def _robust_stats(arr: np.ndarray) -> Dict[str, Any]:
+    """Statistics of a non-empty finite sample (helper, not part of the API)."""
+    p99 = float(np.percentile(arr, 99, method="linear"))
     return {
         "n": int(arr.size),
         "mean": float(arr.mean()),
         "p50": float(np.percentile(arr, 50, method="linear")),
         "p95": float(np.percentile(arr, 95, method="linear")),
+        "p99": p99,
+        # 稳健上界：p99.9 对应的点数在 200 点/帧对的默认规模下约为 0.2 个点，
+        # 因此它几乎不受单点野值影响，比 max 更能代表"尾部到哪为止"。
+        "p99_9": float(np.percentile(arr, 99.9, method="linear")),
+        "n_above_p99": int(np.count_nonzero(arr > p99)),
         "max": float(arr.max()),
     }
+
+
+_EMPTY_STATS: Dict[str, Any] = {
+    "n": 0, "mean": None, "p50": None, "p95": None, "p99": None,
+    "p99_9": None, "n_above_p99": 0, "max": None,
+    "track_err_p50": None, "track_err_p95": None, "track_err_at_max": None,
+    "track_err_n": 0,
+}
+
+
+def summarize_displacements(
+    values: Optional[Sequence[float] | np.ndarray],
+    track_errors: Optional[Sequence[float] | np.ndarray] = None,
+) -> Dict[str, Any]:
+    """Aggregate displacement norms into count + mean/p50/p95/p99.9/max.
+
+    为什么要有 p99.9：``max`` 是**全部有效点的单一最大值**，一个跟丢了的点
+    就能把它抬到整帧真实运动的好几倍（实测：640×480 下 lerobot_folding 报出
+    max=75.04 px，而同帧其余 199 个点最大仅 10.02 px、LK 自己给该点的残差
+    err=66.74）。把这样的数裸着放进报告，第三方复核时会读成"存在 75 px 的帧
+    间位移"，那是错的。所以：
+      * **判定仍用 p95**（保守口径，与 v0.11.0 一致，未变）；
+      * **p99.9 作为稳健上界**一并给出；
+      * **max 保留但必须标注为单点极值**（标注在报告那份 markdown 里，见
+        ``rda/conform/report.py`` 的脚注），不允许单独引用。
+
+    Args:
+        values: 位移范数样本（px）。
+        track_errors: 与 ``values`` **逐点对齐**的 LK 跟踪残差；给出时额外
+            返回 ``track_err_p50`` / ``track_err_p95`` /
+            ``track_err_at_max``（产生 max 的那个点的残差——复核单个野值时
+            最直接的一条证据）与 ``track_err_n``（残差可用的点数）。
+
+    百分位用 **线性插值**（``numpy.percentile`` 默认 ``method="linear"``），
+    报告里要把插值方法写出来，否则第三方无法复算同一个数。空样本返回全 None
+    且 ``n == 0``——调用方据此判 UNDETERMINED，不许当成 0 去凑阈值。
+    """
+    out = dict(_EMPTY_STATS)
+    if values is None:
+        return out
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size and track_errors is not None:
+        terr = np.asarray(track_errors, dtype=np.float64).reshape(-1)
+        if terr.shape[0] == arr.shape[0]:
+            ok = np.isfinite(arr) & np.isfinite(terr)
+            aligned_err = terr[ok]
+            aligned_disp = arr[ok]
+        else:
+            aligned_err = None  # 长度对不上 → 残差不可用，按缺失处理
+            ok = np.isfinite(arr)
+            aligned_disp = arr[ok]
+    else:
+        aligned_err = None
+        ok = np.isfinite(arr)
+        aligned_disp = arr[ok]
+    arr = aligned_disp
+    if arr.size == 0:
+        return out
+    out.update(_robust_stats(arr))
+    if aligned_err is not None and aligned_err.size:
+        out["track_err_n"] = int(aligned_err.size)
+        out["track_err_p50"] = float(np.percentile(aligned_err, 50,
+                                                   method="linear"))
+        out["track_err_p95"] = float(np.percentile(aligned_err, 95,
+                                                   method="linear"))
+        idx = int(np.argmax(aligned_disp))
+        out["track_err_at_max"] = float(aligned_err[idx])
+    return out
