@@ -49,6 +49,9 @@ class ConformOptions:
     workspace_max_distance: Optional[float] = None
     # coverage 门禁。P0 只留桩，见 run_conformance 中的 TODO。
     strict_coverage: bool = False
+    # 视频层参与度：sample（抽样）/ full（全量）/ off（不读视频，等价 v0.10.x）。
+    # sample 与 full 都依赖 av + opencv；off 时相关判定项一律 UNDETERMINED。
+    video: str = "sample"
 
     def resolved_max_distance(self) -> Optional[float]:
         """Return the declared 'feasible-space max distance', or None.

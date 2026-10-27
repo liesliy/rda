@@ -98,6 +98,23 @@ class SamplingSpec(BaseModel):
         description="自相关（含速度层过零搜索）的最大滞后阶。",
     )
     seed: int = Field(default=0, description="抽样随机种子，保证可复算。")
+    # --- v0.11.0 视频层抽样 -------------------------------------------------
+    # 视频解码比读 parquet 贵几个数量级（单帧 640×480 灰度 ≈ 300 KB，一次
+    # seek+decode 区间包含上千帧），默认值刻意取小。
+    video_episodes: int = Field(
+        default=2, ge=1,
+        description=(
+            "视频层（6.2.5.2 a) 1) 运动模糊 / 附录 A）抽样的 episode 数"
+            "（默认 2）。总数不足时按实际存在的 episode 数。"
+        ),
+    )
+    video_frame_pairs: int = Field(
+        default=8, ge=1,
+        description=(
+            "每个 episode 每路相机抽取的**相邻帧对**数（默认 8）。"
+            "每对跑一次 Lucas-Kanade 金字塔光流。"
+        ),
+    )
 
 
 class ConformProfile(BaseModel):
@@ -111,6 +128,16 @@ class ConformProfile(BaseModel):
         description=(
             "帧间隔超过 frame_loss_factor × 标称采样周期即计为丢帧。"
             "标准未规定该系数，属工程口径，可配置。"
+        ),
+    )
+    exposure_fraction: Optional[float] = Field(
+        default=None, gt=0.0, le=1.0,
+        description=(
+            "曝光时间占帧周期的比例 α = 曝光时间 / 帧周期（曝光分数），"
+            "口径为 ORIGIN_DECLARED（委托方声明值）。标准把全快门角度/曝光"
+            "时间交给数据提供方，工具不得代为取值。声明后运动模糊核长度由"
+            "光流上界 d 按下式换算：L = α·d；未声明则只能做单边判定"
+            "（d ≤ 5 px 判 PASS，d > 5 px 判 UNDETERMINED，绝不判 FAIL）。"
         ),
     )
     sampling: SamplingSpec = Field(default_factory=SamplingSpec)
@@ -247,5 +274,6 @@ def profile_to_dict(profile: ConformProfile) -> Dict[str, Any]:
         "core_fields": profile.core_fields,
         "frame_loss_factor": profile.frame_loss_factor,
         "sampling": profile.sampling.model_dump(),
+        "exposure_fraction": profile.exposure_fraction,
         "thresholds": resolved,
     }

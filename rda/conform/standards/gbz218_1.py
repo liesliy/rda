@@ -281,11 +281,13 @@ DOI_URI_PRESENT = Threshold(
     origin=ORIGIN_STANDARD,
 )
 
-# --- 视频像素层判定（本版本未实现） ---------------------------------------
-# 这些判定需要解码视频像素，P0 不引入 opencv/av/torch，故一律 NOT_APPLICABLE。
-# 条款号已按 GB/Z 218.1-2026 正式版补录：6.2.5.2 a) 1) 与附录 A.1~A.3。
-# 仍未查到条款号的项（曝光异常、帧间分辨率一致性）继续留 ``—`` 并标"待补录"，
-# 不编造条款号。
+# --- 6.2.5.2 a) 1) 运动模糊核长度 ------------------------------------------
+# v0.11.0 起由 rda/conform/video.py 用 Lucas-Kanade 金字塔光流实测（阈值为宜类）。
+# 标准只给限值不给方法，故 automation 层面的方法声明写在 checks.py 的 method 字段里。
+#
+# 注：0.10.x 曾在此列了"曝光异常（过曝/欠曝）"与"帧间分辨率一致性"两项，条款号
+# 标为"待补录"。经逐字核对 GB/Z 218.1-2026 全文，标准中并无这两条要求，该两项
+# 已于 v0.11.0 移除——留着"待补录"等于把凑不出条款号的自选指标挂在国标名下。
 MOTION_BLUR_KERNEL_PX = Threshold(
     clause="6.2.5.2 a) 1)",
     binding=BINDING_ADVISORY,
@@ -331,20 +333,6 @@ APPENDIX_A_RECOMMENDED = (
     ),
 )
 
-VIDEO_PIXEL_LAYER_CHECKS: tuple = (
-    f"{MOTION_BLUR_KERNEL_PX.clause} {MOTION_BLUR_KERNEL_PX.describe()}"
-    f"（{MOTION_BLUR_KERNEL_PX.binding}）",
-    "曝光异常（过曝/欠曝）——条款号待补录",
-    "帧间分辨率一致性——条款号待补录",
-)
-VIDEO_PIXEL_LAYER_CLAUSES: tuple = (
-    MOTION_BLUR_KERNEL_PX.clause,
-    "—",
-    "—",
-)
-VIDEO_PIXEL_LAYER_NOTE = "需要视频像素层，本版本未实现"
-
-
 def all_thresholds() -> Dict[str, Threshold]:
     """Return the default threshold table keyed by machine-readable name.
 
@@ -364,4 +352,8 @@ def all_thresholds() -> Dict[str, Threshold]:
         "modality_coverage": MODALITY_CATEGORIES,
         "trajectory_hausdorff_ratio": TRAJECTORY_HAUSDORFF_RATIO,
         "doi_uri_present": DOI_URI_PRESENT,
+        # v0.11.0 注册：本阈值自 0.10.0 起就存在却没进这张表，profile 覆盖不到它，
+        # 等于"阈值可配"这条纪律在此处失效。运动模糊核长度是唯一一个有条款、有
+        # 限值却不受 profile 控制的判定项，现已补齐。
+        "motion_blur_kernel_px": MOTION_BLUR_KERNEL_PX,
     }

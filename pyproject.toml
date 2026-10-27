@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot-data-audit"
-version = "0.10.1"
+version = "0.11.0"
 description = "Robot Data Audit (RDA) - Quality auditing tool for robot datasets"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -36,7 +36,11 @@ dependencies = [
 # otherwise only a transitive dep of lerobot>=0.6, which most users don't want.
 parquet = ["pandas>=2.0", "pyarrow>=14.0"]
 lerobot = ["lerobot>=0.6"]
-video = ["av>=12.0"]
+# v0.11.0: 视频层不再只看容器能不能打开，还要解码像素跑 Lucas-Kanade 金字塔
+# 光流（附录 A.1），因此 av（解码）与 opencv（光流）必须成对安装，缺一即整层
+# 降级为 UNDETERMINED。opencv 的上界沿用 pi 组的实测依据：4.14.0 自带 Haar
+# 级联 XML，5.0.0 一个都不带；两处同区间便于同一小版本范围内验证。
+video = ["av>=12.0", "opencv-python-headless>=4.8,<5"]
 # Face detection inside pii_scan needs a Haar cascade. Verified 2026-10-13:
 # opencv-python-headless 4.14.0 ships haarcascade_frontalface_default.xml,
 # 5.0.0 ships none at all — hence the upper bound, not conservatism.

@@ -20,11 +20,8 @@ import numpy as np
 
 from rda.conform.profile import ConformProfile
 from rda.conform.standards.gbz218_1 import (
-    APPENDIX_A_RECOMMENDED,
     BINDING_ADVISORY,
-    VIDEO_PIXEL_LAYER_CHECKS,
-    VIDEO_PIXEL_LAYER_CLAUSES,
-    VIDEO_PIXEL_LAYER_NOTE,
+    BINDING_INFORMATIONAL,
 )
 from rda.conform.timeseries import (
     autocorrelation,
@@ -33,6 +30,16 @@ from rda.conform.timeseries import (
     resample_sequence,
 )
 from rda.conform.verdict import ConformanceItem, Verdict, compare
+# 视频层依赖（av / cv2）是**延迟导入**的：rda.conform.video 在模块级只依赖
+# numpy，真正导入 av/cv2 发生在 VideoProbe 的方法里，缺失由此降级为
+# UNDETERMINED 而不是 import 期崩溃。
+from rda.conform.video import (
+    DIAG_REJECT_RATIO,
+    MIN_VALID_POINTS_PER_PAIR,
+    CameraMotionStats,
+    VideoProbe,
+    summarize_displacements,
+)
 
 # 观测项（附录 B）计算结果的进程内缓存：Hausdorff/DTW 很贵，
 # 判定项与观测节共用一次计算结果，避免重复跑分钟级运算。
@@ -1166,6 +1173,38 @@ def compute_observations(view, profile: ConformProfile, options) -> Dict[str, An
     else:
         obs["autocorrelation"] = {"note": "无法计算：缺少 action 或抽样为空。"}
 
+    # --- 附录 A 动态性观测（标准只给方法/公式，不设数据阈值 → 不做判定）----
+    # 与 6.2.5.2 a) 1) 的运动模糊判定共用同一份视频层测量结果（见
+    # _measure_video_layer 的缓存），保证报告里同一路相机只有一个数。
+    try:
+        obs["appendix_a_optical_flow"] = _appendix_a_optical_flow(
+            view, profile, options)
+    except ImportError as e:  # 依赖缺失也是观测结论的一部分，不许吞掉
+        obs["appendix_a_optical_flow"] = {
+            "clause": "附录 A.1", "binding": BINDING_INFORMATIONAL,
+            "status": "DEPENDENCY_MISSING", "dependency_error": str(e),
+            "note": f"本地环境未安装视频解码/光流依赖，非数据集缺陷：{e}",
+        }
+    except Exception as e:  # noqa: BLE001 — 观测项失败不得拖垮整份报告
+        obs["appendix_a_optical_flow"] = {
+            "clause": "附录 A.1", "binding": BINDING_INFORMATIONAL,
+            "status": "NOT_MEASURED",
+            "note": f"观测失败（{type(e).__name__}: {e}）——不代替任何判定结论。",
+        }
+    for obs_key, fn, clause in (
+        ("appendix_a_spectral_flux", _appendix_a_spectral_flux, "附录 A.2"),
+        ("appendix_a_pointcloud_dynamics", _appendix_a_pointcloud_dynamics,
+         "附录 A.3"),
+    ):
+        try:
+            obs[obs_key] = fn(view, profile, options)
+        except Exception as e:  # noqa: BLE001
+            obs[obs_key] = {
+                "clause": clause, "binding": BINDING_INFORMATIONAL,
+                "status": "NOT_MEASURED",
+                "note": f"观测失败（{type(e).__name__}: {e}）——不代替任何判定结论。",
+            }
+
     _OBS_CACHE[key] = obs
     return obs
 
@@ -1227,37 +1266,693 @@ def check_trajectory_hausdorff(view, profile: ConformProfile, options) -> Confor
 
 
 # ---------------------------------------------------------------------------
-# 视频像素层判定（本版本未实现）
+# 视频层：6.2.5.2 a) 1) 运动模糊 + 附录 A 动态性观测
 # ---------------------------------------------------------------------------
 
+_VIDEO_CACHE: Dict[str, Any] = {}
 
-def check_video_pixel_layer(view, profile: ConformProfile, options) -> ConformanceItem:
-    """视频像素层判定：本版本一律 NOT_APPLICABLE。
+# 制式意义上的"视频流"：dtype 为 video（逐帧图片文件的 image 类不在此列，
+# 那些没有帧率也没有编码时间戳，光流无从谈起）。
+_VIDEO_STREAM_DTYPES = ("video",)
+_AUDIO_DTYPES = ("audio",)
+_POINTCLOUD_DTYPES = ("pointcloud", "point_cloud", "points3d")
+_POINTCLOUD_NAME_HINTS = ("pointcloud", "point_cloud", "pcd", "lidar")
 
-    P0 不引入 opencv / av / torch，无法解码视频像素，因此这些判定项
-    不做、也不许说做了。条款号已按 GB/Z 218.1-2026 正式版补录
-    （6.2.5.2 a) 1) 与附录 A.1~A.3）；仍未查到原文的两项继续留 ``—``
-    并标注"待补录"，不编造条款号。
-    """
-    clause = "6.2.5.2 a) 1) / 附录 A.1–A.3（另 2 项条款号待补录）"
-    return _na(
-        clause,
-        "video_pixel_layer_checks",
-        None, "—",
-        "需解码视频像素后逐帧计算。",
-        f"{VIDEO_PIXEL_LAYER_NOTE}：{', '.join(VIDEO_PIXEL_LAYER_CHECKS)}。",
-        {
-            "checks": list(VIDEO_PIXEL_LAYER_CHECKS),
-            "clauses": list(VIDEO_PIXEL_LAYER_CLAUSES),
-            "supplementary_methods": [
-                {"clause": t.clause, "binding": t.binding, "quantity": t.quantity,
-                 "value": t.value, "note": t.note}
-                for t in APPENDIX_A_RECOMMENDED
-            ],
-            "videos_dir_present": view.videos_dir.exists(),
-        },
-        value=None,
+# 频谱流量 STFT 窗参数：**工程口径**，标准只给了公式 A.2，没给窗长/跳距。
+SF_NPERSEG = 512
+SF_HOP = 256
+
+_VIDEO_METHOD_HEAD = (
+    "Lucas-Kanade 金字塔光流（附录 A.1 明文允许的两种算法之一）："
+    "cv2.goodFeaturesToTrack 取 Shi-Tomasi 角点 → cv2.calcOpticalFlowPyrLK。"
+    "帧保持原分辨率（如 640×480）解码，全程在内存中 seek+decode，"
+    "**不落盘任何临时文件**；帧率只从容器元数据读"
+    "（average_rate→base_rate→guessed_rate），读不到即判 UNDETERMINED，"
+    "绝不假定 30/60。"
+)
+
+_VIDEO_METHOD_TAIL = (
+    "可靠性判据：status==1 且位移 < 图像对角线×10%（0.10 为工程口径）；"
+    "被剔除的点与帧一律计数并在报告中披露，不静默丢弃。"
+)
+
+
+def _video_stream_features(view) -> List[str]:
+    """数据集声明的**视频流**类特征（dtype == video），按名排序。"""
+    specs = view.feature_specs()
+    return sorted(
+        f for f, s in specs.items()
+        if str(s.get("dtype", "")).lower() in _VIDEO_STREAM_DTYPES
     )
+
+
+def _audio_features(view) -> List[str]:
+    """声明的音频类特征：dtype 为 audio，或特征名含 audio。"""
+    specs = view.feature_specs()
+    out = []
+    for f, s in specs.items():
+        if str(s.get("dtype", "")).lower() in _AUDIO_DTYPES or "audio" in f.lower():
+            out.append(f)
+    return sorted(out)
+
+
+def _pointcloud_features(view) -> List[str]:
+    """声明的三维点云类特征（附录 A.3 的唯一适用对象）。"""
+    specs = view.feature_specs()
+    out = []
+    for f, s in specs.items():
+        dtype = str(s.get("dtype", "")).lower()
+        if dtype in _POINTCLOUD_DTYPES:
+            out.append(f)
+            continue
+        low = f.lower()
+        if any(h in low for h in _POINTCLOUD_NAME_HINTS):
+            out.append(f)
+    return sorted(out)
+
+
+def _resolve_video_file(view, feature: str, file_index: Optional[int]) -> Optional[Path]:
+    """Pick the payload file for one (feature, episode), or ``None``.
+
+    ``videos/<feature>/chunk-*/file-<file_index>.mp4``：``file_index`` 是
+    **episodes 元数据里写的那个序号**（补零位数各数据集不同，故按数值匹配而
+    不是按文件名字符串匹配）。找不到就返回 ``None`` —— 此时该 episode 的载荷
+    不在这份本地副本里，**不得**随手拿同一特征的另一个 mp4 顶替：那样等于把
+    别的 episode 的解码结果套到这个 episode 头上（初版正是这么错的：给
+    episode 764 解了 file-000.mp4 的内容，还把它记成 764 的位移）。
+    """
+    files = view.video_payload_files(feature)
+    if not files:
+        return None
+    if file_index is None:
+        return files[0]
+    try:
+        idx = int(file_index)
+    except (TypeError, ValueError):
+        return files[0]
+    for p in files:
+        m = re.search(r"file-(\d+)$", p.stem)
+        if m and int(m.group(1)) == idx:
+            return p
+    return None
+
+
+def _spectral_flux(samples: np.ndarray, nperseg: int = SF_NPERSEG,
+                   hop: int = SF_HOP) -> np.ndarray:
+    """附录 A.2 公式 A.2：``SF(t) = Σ_k ( |X_k(t)| − |X_k(t−1)| )``。
+
+    用 Hann 窗 + ``np.fft.rfft`` 逐窗取频谱幅度再对相邻窗求和。窗长/跳距是
+    **工程口径**（标准只给公式，未给 STFT 参数），因此必须在结果里一并披露。
+    """
+    x = np.asarray(samples, dtype=np.float64).ravel()
+    if x.size < nperseg:
+        return np.zeros((0,), dtype=np.float64)
+    window = np.hanning(nperseg)
+    mags: List[np.ndarray] = []
+    for start in range(0, x.size - nperseg + 1, hop):
+        mags.append(np.abs(np.fft.rfft(x[start:start + nperseg] * window)))
+    if len(mags) < 2:
+        return np.zeros((0,), dtype=np.float64)
+    m = np.stack(mags)
+    return np.sum(m[1:] - m[:-1], axis=1)
+
+
+def _pointcloud_dynamics(points: np.ndarray) -> Tuple[Optional[np.ndarray], str]:
+    """附录 A.3 公式 A.3：``D(t) = Σ_i ‖P_i(t) − P_i(t−1)‖``。
+
+    ``points`` 形如 ``(T, N, 3)`` 或 ``(T, N*3)``（后者在能被 3 整除时reshape）。
+    摆放顺序（最后一维是否为 xyz）无法由本工具核验——生态环境返回的 note 必须
+    写明这条假设。
+    """
+    arr = np.asarray(points, dtype=np.float64)
+    if arr.ndim == 3:
+        xyz = arr
+    elif arr.ndim == 2 and arr.shape[1] % 3 == 0:
+        xyz = arr.reshape(arr.shape[0], -1, 3)
+    else:
+        return None, (
+            f"特征数组的形状为 {tuple(arr.shape)}，无法解释为点云序列"
+            "（需要 (T,N,3) 或 (T,N*3)）"
+        )
+    if xyz.shape[0] < 2:
+        return None, f"点云序列只有 {xyz.shape[0]} 帧，无法求帧间位移"
+    step = np.linalg.norm(xyz[1:] - xyz[:-1], axis=2)
+    return step.sum(axis=1), f"按最后一维 = xyz 解释，N={xyz.shape[1]} 个点"
+
+
+def _measure_video_layer(view, profile: ConformProfile, options) -> Dict[str, Any]:
+    """跑一次视频层测量（结果按 **数据集 + 抽样参数 + video 模式** 缓存）。
+
+    返回的结构同时服务于 6.2.5.2 a) 1) 的判定项和附录 A.1 的观测项——两者用
+    同一份光流结果，避免同一个 185 MB 文件被解码两遍，也避免判定项与观测节
+    给出两个不一致的数。
+    """
+    s = profile.sampling
+    mode = str(getattr(options, "video", "sample") or "sample").lower()
+    key = "|".join([str(view.root), mode, str(s.video_episodes),
+                    str(s.video_frame_pairs), str(s.seed)])
+    if key in _VIDEO_CACHE:
+        return _VIDEO_CACHE[key]
+
+    out: Dict[str, Any] = {
+        "mode": mode,
+        "status": "MEASURED",
+        "features": [],
+        "cameras": [],
+        "sampling": {
+            "video_episodes": s.video_episodes,
+            "video_frame_pairs": s.video_frame_pairs,
+            "seed": s.seed,
+            "total_episodes": view.num_episodes,
+            "episodes_sampled": [],
+        },
+        "temp_files": (
+            "视频层计算全程在内存中完成（av 的 seek + decode），"
+            "未下载、未解包、未产生任何临时文件。"
+        ),
+        "notes": [],
+        "dependency_error": None,
+    }
+
+    features = _video_stream_features(view)
+    coverage = {f: len(view.video_payload_files(f)) for f in features}
+    out["features"] = [{"feature": f, "file_count": coverage[f]} for f in features]
+    out["features_with_payload"] = [f for f, n in coverage.items() if n > 0]
+    out["features_without_payload"] = [f for f, n in coverage.items() if n == 0]
+
+    if mode == "off":
+        out["status"] = "OFF"
+        out["notes"].append("已按 --video=off 关闭视频层：本次未读取任何视频像素。")
+        _VIDEO_CACHE[key] = out
+        return out
+    if not features:
+        out["status"] = "NO_VIDEO_FEATURES"
+        out["notes"].append("数据集未声明 dtype=video 的视频流特征。")
+        _VIDEO_CACHE[key] = out
+        return out
+    if not out["features_with_payload"]:
+        out["status"] = "NO_PAYLOAD"
+        _VIDEO_CACHE[key] = out
+        return out
+
+    probe = VideoProbe()
+    try:
+        probe._require_av()
+        probe._require_cv2()
+    except ImportError as e:
+        out["status"] = "DEPENDENCY_MISSING"
+        out["dependency_error"] = str(e)
+        _VIDEO_CACHE[key] = out
+        return out
+
+    windows = view.video_windows()
+    all_ids = list(view.episode_ids())
+    # 抽样是在"本地能读到载荷的那部分 episode"里做的（见下方 pool），所以
+    # episodes_sampled 只能在跑完之后回填——先抽一轮再发现文件不存在会把
+    # UNDETERMINED 变成抽样设计的副产品，而不是 seseCommon 的真实结论。
+    sel_rng = np.random.default_rng(s.seed)
+    for feature in out["features_with_payload"]:
+        files = view.video_payload_files(feature)
+        # 抽样池 = **本地真能读到载荷的 episode**。抽样必须在"可核验的那部分"
+        # 里做：1200 个 episode 里只有 2 个下过视频时，从总表里抽 2 个必然抽到
+        # 没下过的 episode，那样得出来的 UNDETERMINED 与数据集无关，纯粹是抽样
+        # 设计的问题。
+        pool = [ep for ep in sorted(all_ids)
+                if windows.get(feature, {}).get(ep) is not None
+                and _resolve_video_file(view, feature,
+                                        windows[feature][ep][2]) is not None]
+        if mode == "full":
+            cam_eps = pool
+        elif len(pool) <= s.video_episodes:
+            cam_eps = pool
+        else:
+            picks = np.sort(sel_rng.choice(np.array(pool), size=s.video_episodes,
+                                           replace=False))
+            cam_eps = [int(x) for x in picks]
+        out.setdefault("episode_pool", {})[feature] = {
+            "pool_size": len(pool),
+            "pool_kind": "本地有载荷文件的 episode",
+            "sampled": cam_eps,
+        }
+        start_rng = np.random.default_rng(s.seed)
+        cam = CameraMotionStats(
+            feature=feature, file_count=len(files),
+            files_resolved=[p.name for p in files[:3]],
+            n_episodes_requested=len(cam_eps),
+            n_pairs_requested=len(cam_eps) * s.video_frame_pairs,
+        )
+        per_cam: List[np.ndarray] = []
+        for ep in cam_eps:
+            win = windows.get(feature, {}).get(ep)
+            from_ts, to_ts, file_index = win
+            path = _resolve_video_file(view, feature, file_index)
+            if path is None:
+                cam.notes.append(f"episode {ep}：本地副本中没有 {feature} 的载荷文件")
+                continue
+            if from_ts is None or to_ts is None or to_ts <= from_ts:
+                cam.notes.append(f"episode {ep}：时间窗口 [{from_ts}, {to_ts}) 无效")
+                continue
+            ps = probe.read_consecutive_pairs(
+                path, from_ts, to_ts, n_pairs=s.video_frame_pairs, rng=start_rng)
+            if ps.decode_error:
+                cam.decode_errors.append(f"episode {ep}：{ps.decode_error}")
+                continue
+            if not ps.pairs:
+                cam.decode_errors.append(f"episode {ep}：窗口内没有解出相邻帧对")
+                continue
+            if ps.fps is not None:
+                cam.fps = ps.fps
+            cam.n_frames_decoded += ps.n_frames_decoded
+            cam.n_episodes_used += 1
+            ep_vals: List[np.ndarray] = []
+            ep_valid = 0
+            ep_total = 0
+            for pair in ps.pairs:
+                res = probe.track_displacements(pair)
+                cam.n_total_points += res.n_features
+                cam.n_valid_points += res.n_valid
+                ep_total += res.n_features
+                ep_valid += res.n_valid
+                if res.n_valid < MIN_VALID_POINTS_PER_PAIR:
+                    # 有效点太少说明这一对的跟踪结果不可信：整对剔除（并计数）
+                    cam.n_pairs_rejected += 1
+                    continue
+                cam.n_pairs_used += 1
+                per_cam.append(res.displacements)
+                ep_vals.append(res.displacements)
+            if ep_vals:
+                agg_ep = summarize_displacements(np.concatenate(ep_vals))
+                cam.episodes.append({
+                    "episode": ep, "fps": ps.fps,
+                    "start_sec": ps.start_sec,
+                    "file": path.name,
+                    "n_frames_decoded": ps.n_frames_decoded,
+                    "n_pairs_used": len(ep_vals),
+                    "n_valid_points": ep_valid, "n_total_points": ep_total,
+                    "mean": agg_ep["mean"], "p50": agg_ep["p50"],
+                    "p95": agg_ep["p95"], "max": agg_ep["max"],
+                })
+        if per_cam:
+            agg = summarize_displacements(np.concatenate(per_cam))
+            cam.n_valid_points = int(cam.n_valid_points)
+            cam.mean, cam.p50 = agg["mean"], agg["p50"]
+            cam.p95, cam.max = agg["p95"], agg["max"]
+        else:
+            cam.notes.append("该路相机没有产出任何有效帧对")
+        out["cameras"].append(cam)
+
+    sampled_eps = sorted({ep for p in out.get("episode_pool", {}).values()
+                          for ep in p["sampled"]})
+    out["sampling"]["episodes_sampled"] = sampled_eps
+    pool_sizes = {f: p["pool_size"] for f, p in out.get("episode_pool", {}).items()}
+    if any(pool_sizes[f] < len(all_ids) for f in pool_sizes):
+        pool_desc = "、".join(f"{k}={v}" for k, v in sorted(pool_sizes.items()))
+        out["notes"].append(
+            "抽样池说明：并非全部 episode 都在本地有视频载荷文件"
+            f"（各路相机可核验的 episode 数：{pool_desc}；数据集总 episode 数 "
+            f"{len(all_ids)}）。本次只在**能核验的那部分**里抽样，"
+            "因此结论只对抽到的 episode 成立，不得外推到整个数据集。"
+        )
+
+    if all(c.p95 is None for c in out["cameras"]):
+        out["status"] = "NO_DATA"
+    _VIDEO_CACHE[key] = out
+    return out
+
+
+def _appendix_a_optical_flow(view, profile: ConformProfile, options) -> Dict[str, Any]:
+    """附录 A.1 光流：**观测项**，标准只对评价方法提要求，不设数据阈值。"""
+    m = _measure_video_layer(view, profile, options)
+    cameras = [c.to_dict() for c in m["cameras"]]
+    return {
+        "clause": "附录 A.1",
+        "binding": BINDING_INFORMATIONAL,
+        "quantity": "帧间光流位移范数",
+        "unit": "px",
+        "status": m["status"],
+        "mode": m["mode"],
+        "cameras": cameras,
+        "sampling": m["sampling"],
+        "features": m["features"],
+        "features_without_payload": m["features_without_payload"],
+        "dependency_error": m["dependency_error"],
+        "notes": list(m["notes"]),
+        "temp_files": m["temp_files"],
+        "formula": (
+            "相邻帧对口位移 d = ‖P_i(t+1) − P_i(t)‖，取该帧对有效点位移的统计量；"
+            "算法为 Lucas-Kanade 金字塔光流（附录 A.1 明文允许）。"
+        ),
+        "percentile_method": "numpy.percentile，线性插值（method='linear'）",
+        "reject_rule": (
+            f"status==1 且位移 < 图像对角线×{DIAG_REJECT_RATIO:g}；"
+            f"单帧对有效点少于 {MIN_VALID_POINTS_PER_PAIR} 个则整对剔除。"
+            f"剔除数与解码失败数均在上方各相机的字段里披露。"
+        ),
+        "note": (
+            "标准只对评价方法提要求（7.2.6 a），不设数据阈值，故本项**不产 "
+            "PASS/FAIL**，仅输出位移统计供第三方复核。"
+        ),
+        "method": _VIDEO_METHOD_HEAD + _VIDEO_METHOD_TAIL,
+    }
+
+
+def _appendix_a_spectral_flux(view, profile: ConformProfile,
+                              options) -> Dict[str, Any]:
+    """附录 A.2 频谱流量 SF(t)。
+
+    口径关键：标准 A.2 原文通篇说的是**音频信号**（「频谱流量量化了频谱在
+    时间上的变化，表示音频信号中的激烈变化」……「捕捉音频信号的频率特征」）。因此
+    本工具只在数据集**声明了音频特征**时计算；无音频一律 NOT_APPLICABLE。
+    **不**把视频帧的 2D FFT 拿去算 SF(t) 冒充 A.2——那是把音频条款硬套到图
+    像上，属于方法不符。
+    """
+    base = {
+        "clause": "附录 A.2",
+        "binding": BINDING_INFORMATIONAL,
+        "quantity": "频谱流量 SF(t)",
+        "unit": "spectral magnitude sum",
+        "status": "NOT_APPLICABLE",
+        "feature": None,
+        "per_episode": [],
+        "p50": None, "p95": None, "max": None, "mean": None, "n_frames": 0,
+        "stft": {"window": "Hann", "nperseg": SF_NPERSEG, "hop": SF_HOP,
+                 "note": "窗长/跳距为工程口径，标准 A.2 未规定"},
+        "formula": "SF(t) = Σ_{k=0}^{K−1} ( |X_k(t)| − |X_k(t−1)| )",
+    }
+    features = _audio_features(view)
+    if not features:
+        base["note"] = (
+            "数据集未声明音频类特征。附录 A.2 的标准原文通篇描述的是**音频信号**"
+            "（「频谱流量量化了频谱在时间上的变化，表示音频信号中的激烈变化」"
+            "……「捕捉音频信号的频率特征」），本工具不将其套用到视频帧上，"
+            "故不适用。"
+        )
+        return base
+
+    mode = str(getattr(options, "video", "sample") or "sample").lower()
+    if mode == "off":
+        base["status"] = "OFF"
+        base["note"] = "已按 --video=off 关闭：本次未读取任何序列数据。"
+        return base
+
+    ep_ids = _sample_episode_ids(view, profile.sampling.video_episodes,
+                                 profile.sampling.seed)
+    declared = features[0]
+    available = [f for f in features if f in view.parquet_columns]
+    if not available:
+        base["feature"] = declared
+        base["status"] = "NOT_MEASURED"
+        base["note"] = (
+            f"数据集声明了 {len(features)} 个音频类特征（{', '.join(features)}），"
+            "但 data parquet 中没有这些列（音频载荷可能在 videos/ 之外的位置，"
+            "或本次副本未包含），无法计算 SF(t)。"
+        )
+        return base
+
+    column = available[0]
+    arrays = view.load_episode_arrays([column], ep_ids)
+    per_episode: List[Dict[str, Any]] = []
+    for ep in sorted(arrays):
+        raw = arrays[ep].get(column)
+        if raw is None:
+            continue
+        arr = np.asarray(raw, dtype=np.float64)
+        if arr.ndim > 1:  # 多声道：按声道平均后合并为单声道
+            arr = arr.reshape(arr.shape[0], -1).mean(axis=1)
+        sf = _spectral_flux(arr)
+        if sf.size == 0:
+            continue
+        agg = summarize_displacements(sf)
+        per_episode.append({
+            "episode": ep,
+            "n_samples": int(arr.size),
+            "n_frames": int(sf.size),
+            "mean": agg["mean"], "p50": agg["p50"],
+            "p95": agg["p95"], "max": agg["max"],
+        })
+    if not per_episode:
+        base["feature"] = column
+        base["status"] = "NOT_MEASURED"
+        base["note"] = (
+            f"音频列 {column} 存在，但抽样的 {len(ep_ids)} 个 episode 里没有"
+            f"足够长的样本做一次 STFT（窗长 {SF_NPERSEG}）。"
+        )
+        return base
+    allsf = np.array([float(x["mean"]) for x in per_episode])
+    agg_all = summarize_displacements(allsf)
+    base.update({
+        "status": "MEASURED",
+        "feature": column,
+        "per_episode": per_episode,
+        "mean": agg_all["mean"], "p50": agg_all["p50"],
+        "p95": agg_all["p95"], "max": agg_all["max"],
+        "n_frames": int(sum(x["n_frames"] for x in per_episode)),
+        "episodes_sampled": [int(x["episode"]) for x in per_episode],
+        "note": (
+            f"对列为 {column} 的音频序列按 Hann 窗 STFT（nperseg={SF_NPERSEG}, "
+            f"hop={SF_HOP}，均为工程口径）取频谱幅度后套公式 A.2。"
+            "多声道按声道平均合并。"
+        ),
+    })
+    return base
+
+
+def _appendix_a_pointcloud_dynamics(view, profile: ConformProfile,
+                                    options) -> Dict[str, Any]:
+    """附录 A.3 公式 A.3：``D(t) = Σ_i ‖P_i(t) − P_i(t−1)‖``。"""
+    base = {
+        "clause": "附录 A.3",
+        "binding": BINDING_INFORMATIONAL,
+        "quantity": "点云运动动态性 D(t)",
+        "unit": "norm sum",
+        "status": "NOT_APPLICABLE",
+        "feature": None,
+        "per_episode": [],
+        "p50": None, "p95": None, "max": None, "mean": None, "n_frames": 0,
+        "formula": "D(t) = Σ_{i=0}^{N−1} ‖P_i(t) − P_i(t−1)‖",
+    }
+    features = _pointcloud_features(view)
+    if not features:
+        base["note"] = (
+            "数据集未声明三维点云类特征（判定依据：特征的 dtype 为 "
+            f"{'/'.join(_POINTCLOUD_DTYPES)}，或名称含 "
+            f"{'/'.join(_POINTCLOUD_NAME_HINTS)}），本项不适用。"
+        )
+        return base
+
+    mode = str(getattr(options, "video", "sample") or "sample").lower()
+    if mode == "off":
+        base["status"] = "OFF"
+        base["note"] = "已按 --video=off 关闭：本次未读取任何序列数据。"
+        return base
+
+    available = [f for f in features if f in view.parquet_columns]
+    if not available:
+        base["feature"] = features[0]
+        base["status"] = "NOT_MEASURED"
+        base["note"] = (
+            f"声明了 {len(features)} 个点云类特征（{', '.join(features)}），"
+            "但 data parquet 中没有这些列，无法计算 D(t)。"
+        )
+        return base
+
+    column = available[0]
+    ep_ids = _sample_episode_ids(view, profile.sampling.video_episodes,
+                                 profile.sampling.seed)
+    arrays = view.load_episode_arrays([column], ep_ids)
+    per_episode: List[Dict[str, Any]] = []
+    assumption = ""
+    for ep in sorted(arrays):
+        raw = arrays[ep].get(column)
+        if raw is None:
+            continue
+        # parquet 里的点云列常常是 list<struct>／扁平化的 float 向量
+        arr = np.asarray(raw, dtype=np.float64)
+        if arr.ndim == 1:
+            arr = np.asarray([np.asarray(v, dtype=np.float64).ravel()
+                              for v in raw if v is not None], dtype=np.float64) \
+                if len(raw) and np.asarray(raw[0]).size else arr
+        values, note = _pointcloud_dynamics(arr)
+        assumption = note
+        if values is None or values.size == 0:
+            continue
+        agg = summarize_displacements(values)
+        per_episode.append({
+            "episode": ep, "n_frames": int(values.size),
+            "mean": agg["mean"], "p50": agg["p50"],
+            "p95": agg["p95"], "max": agg["max"],
+        })
+    if not per_episode:
+        base.update({"status": "NOT_MEASURED", "feature": column,
+                     "note": f"点云列 {column} 存在但无法解释为点云序列：{assumption}"})
+        return base
+    agg_all = summarize_displacements([float(x["mean"]) for x in per_episode])
+    base.update({
+        "status": "MEASURED",
+        "feature": column,
+        "per_episode": per_episode,
+        "mean": agg_all["mean"], "p50": agg_all["p50"],
+        "p95": agg_all["p95"], "max": agg_all["max"],
+        "n_frames": int(sum(x["n_frames"] for x in per_episode)),
+        "episodes_sampled": [int(x["episode"]) for x in per_episode],
+        "note": f"对 {column} 按公式 A.3 逐帧求得。{assumption}",
+    })
+    return base
+
+
+def check_motion_blur_kernel_px(view, profile: ConformProfile,
+                                options) -> ConformanceItem:
+    """6.2.5.2 a) 1)：运动模糊核长度宜 ≤ 5 px。
+
+    标准给了限值（宜 ≤ 5 px）却没给方法，因此方法必须由我们自己说清并保持
+    可复算。本实现用**光流上界法**：帧间光流位移 d 是模糊核长度 L 的几何上界
+    （``L = α·d``，``α = 曝光时间/帧周期 ≤ 1``，出处 arXiv:2303.10247）。
+
+    三条支路严格区分「没查」与「不合格」：
+      1. 没有视频载荷 / av+cv2 缺失 / --video=off → **UNDETERMINED**；
+      2. α 已由委托方声明 → ``L = α·d``，按 5 px 双边判 PASS / FAIL；
+      3. α 未声明 → ``d ≤ 5`` 判 PASS（上界蕴含合规）；``d > 5`` **绝不判
+         FAIL**，只判 UNDETERMINED——没有 α 就排除不掉 L 仍 ≤ 5 的可能。
+
+    红线：**不允许**把 ``visual_quality.py`` 的 Laplacian 方差之类的清晰度
+    代理指标拿来和 5 px 比较。那类指标区分不了散焦与运动拖尾，用了等于把
+    两个不同的物理量混为一谈。
+    """
+    from rda.conform.video import displacement_is_blur_upper_bound
+
+    th = profile.threshold("motion_blur_kernel_px")
+    metric = "motion_blur_kernel_px"
+    alpha = profile.exposure_fraction
+    base = displacement_is_blur_upper_bound()
+    method = (
+        _VIDEO_METHOD_HEAD + base + _VIDEO_METHOD_TAIL
+        + "平均每路相机取位移范数的 p95（比中位数保守）；多路相机时取各相机 "
+          "p95 的最大值。曝光分数 α = "
+        + ("{:.4f}".format(alpha) + "（委托方声明值 ORIGIN_DECLARED）"
+           if alpha is not None else "未声明（ORIGIN_DECLARED 缺失）")
+        + "。假设：全局快门、帧内运动近似匀速、曝光时间 ≤ 帧周期。"
+          "失效场景：滚动快门（逐行曝光使同一帧各行的有效 α 不同）、"
+          "剧烈非匀速运动或碰撞回弹、遮挡边界处的粗大运动，以及相机自运动与"
+          "被跟踪物体运动不可分离时，光流位移不再构成该点模糊核长度的上界。"
+          "**不使用 Laplacian 方差等清晰度代理指标**：它们不能区分散焦与运动"
+          "拖尾，与 5 px 阈值比较即为方法不符。"
+    )
+    m = _measure_video_layer(view, profile, options)
+    details: Dict[str, Any] = {
+        "mode": m["mode"],
+        "measurement_status": m["status"],
+        "cameras": [c.to_dict() for c in m["cameras"]],
+        "sampling": m["sampling"],
+        "feature_coverage": m["features"],
+        "features_without_payload": m["features_without_payload"],
+        "episode_pool": m.get("episode_pool", {}),
+        "exposure_fraction": alpha,
+        "exposure_fraction_origin": "ORIGIN_DECLARED" if alpha is not None else None,
+        "temp_files": m["temp_files"],
+        "notes": m["notes"],
+        "method_reference": "arXiv:2303.10247（Korcak & Matas, CVWW 2024）",
+    }
+
+    off_note = ""
+    if m["status"] == "OFF":
+        return _undetermined(
+            th.clause, metric, th.describe(), th.binding, method,
+            "缺失输入：--video=off 已关闭视频层，本次未读取任何视频像素。"
+            "这不是通过，只是没查。" + off_note, details)
+
+    if m["status"] == "DEPENDENCY_MISSING":
+        err = m["dependency_error"] or ""
+        if "av is required" in err:
+            dep = "av"
+        elif "opencv is required" in err:
+            dep = "opencv"
+        else:
+            dep = "视频解码/光流依赖"
+        details["dependency_error"] = err
+        return _undetermined(
+            th.clause, metric, th.describe(), th.binding, method,
+            f"缺失输入：本地环境未安装 {dep}，非数据集缺陷。"
+            "这是**评测环境**的依赖缺口，不代表被测数据集不符合条款；"
+            "补装依赖后重跑方可裁定。"
+            + (f"（原始信息：{err}）" if err else ""), details)
+
+    if m["status"] == "NO_VIDEO_FEATURES":
+        return _na(
+            th.clause, metric, None, th.binding, method,
+            "数据集未声明 dtype=video 的视频流特征，本条款无从适用。", details)
+
+    if m["status"] == "NO_PAYLOAD":
+        missing = m["features_without_payload"]
+        return _undetermined(
+            th.clause, metric, th.describe(), th.binding, method,
+            "视频层未下载/不可用，无法解码像素：数据集声明了 "
+            f"{len(missing)} 路视频特征（{', '.join(missing)}），其载荷位于 "
+            "videos/ 目录，而本数据集副本"
+            + ("的 videos/ 目录不存在" if not view.videos_dir.exists()
+               else f"的 videos/ 目录下没有这些特征的文件（videos/ 内文件总数 "
+                    f"{view.videos_dir_file_count()}）")
+            + "。**这是本地副本不完整，不是数据集本身的字段缺失或质量缺陷**，"
+              "本项无法裁定。请提供含 videos/ 的完整数据集后复测。", details)
+
+    if m["status"] == "NO_DATA":
+        return _undetermined(
+            th.clause, metric, th.describe(), th.binding, method,
+            "缺失输入：已读到视频载荷，但抽样窗口内没有解出任何有效帧对"
+            "（详见 cameras 字段里的 decode_errors 与 notes）。"
+            "不可解码文件不算通过。", details)
+
+    # --- 到此已测得位移：d = max(各相机 p95) --------------------------------
+    measured = [c for c in m["cameras"] if c.p95 is not None]
+    d = max(c.p95 for c in measured)
+    details["upper_bound_p95_px"] = float(d)
+    details["upper_bound_p95_source"] = "各相机位移范数 p95 的最大值"
+    per_cam_note = "；".join(
+        f"{c.feature}: p50={c.p50:.3f} p95={c.p95:.3f} max={c.max:.3f} px"
+        f"（{c.n_valid_points}/{c.n_total_points} 个跟踪点，{c.n_pairs_used} 帧对）"
+        for c in measured
+    )
+    uncovered = m["features_without_payload"]
+    coverage_note = (
+        f"注意：另有 {len(uncovered)} 路视频特征本地无载荷文件"
+        f"（{', '.join(uncovered)}），未参与本次判定。"
+        if uncovered else "本次参与判定的视频特征均已按特征级确认有载荷文件。"
+    )
+
+    if alpha is None:
+        if d <= th.value:
+            return _ok(
+                th.clause, metric, None, th.describe(), th.binding, method,
+                f"未声明曝光分数 α，只能做上界判定：实测帧间光流位移 p95 = "
+                f"{d:.4f} px ≤ {th.value:g} px，"
+                f"由 L = α·d 且 α ≤ 1 知核长度 L ≤ {d:.4f} px，**值 ≤ 5 px "
+                f"蕴含合规**，故判 PASS（判定性质：光流上界判定，非直接测量"
+                f"核长度）。{per_cam_note}。{coverage_note}", details)
+        return _undetermined(
+            th.clause, metric, th.describe(), th.binding, method,
+            f"未声明曝光分数 α：实测帧间光流位移 p95 = {d:.4f} px，超过 "
+            f"{th.value:g} px 阈值，但 α 未知时无法由 d > 5 px 推出 L > 5 px"
+            f"（L = α·d，α 可能远小于 1），**因此不得判 FAIL**，判 UNDETERMINED。"
+            f"如需可知的结论，请由委托方声明曝光分数 α"
+            f"（profile.exposure_fraction）。{per_cam_note}。{coverage_note}",
+            details)
+
+    blur_px = float(alpha) * float(d)
+    details["motion_blur_kernel_px_value"] = blur_px
+    ok = compare(blur_px, th.value, th.comparator)
+    alpha_note = (
+        f"曝光分数 α = {alpha:.4f}（委托方声明值），由 L = α·d 得核长度 "
+        f"L = {blur_px:.4f} px。"
+    )
+    if ok is None:
+        return _undetermined(th.clause, metric, th.describe(), th.binding, method,
+                             "缺失输入：无法比较运动模糊核长度。", details, blur_px)
+    if ok:
+        return _ok(th.clause, metric, blur_px, th.describe(), th.binding, method,
+                   f"{alpha_note}满足 {th.describe()}（宜类条款）。"
+                   f"{per_cam_note}。{coverage_note}", details)
+    return _fail(th.clause, metric, blur_px, th.describe(), th.binding, method,
+                 f"{alpha_note}不满足 {th.describe()}。{per_cam_note}。{coverage_note}",
+                 details)
 
 
 ALL_CHECKS = [
@@ -1272,5 +1967,5 @@ ALL_CHECKS = [
     check_modality_coverage,
     check_doi_uri,
     check_trajectory_hausdorff,
-    check_video_pixel_layer,
+    check_motion_blur_kernel_px,
 ]

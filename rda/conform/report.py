@@ -53,6 +53,19 @@ _VERDICT_LABEL = {
 _ORDER = [Verdict.FAIL.value, Verdict.UNDETERMINED.value,
           Verdict.PASS.value, Verdict.NOT_APPLICABLE.value]
 
+# 附录 A 观测项的计算状态 → 中文说明。观测项没有四态结论，用"能不能算出来"
+# 表达，不冒充 PASS/FAIL。
+_STATUS_LABEL = {
+    "MEASURED": "本次已实测",
+    "NOT_APPLICABLE": "条款对该数据集不适用",
+    "NOT_MEASURED": "数据存在但本次算不出来（不等于通过）",
+    "NO_VIDEO_FEATURES": "数据集未声明视频流特征",
+    "NO_PAYLOAD": "本地副本缺少视频载荷文件",
+    "NO_DATA": "已读到视频文件但没解出有效帧对",
+    "DEPENDENCY_MISSING": "本地环境缺少 av / opencv",
+    "OFF": "已按 --video=off 关闭视频层",
+}
+
 
 def build_conformance_node(result: ConformanceResult) -> Dict[str, Any]:
     """Build the ``conformance`` node to be merged into the JSON report.
@@ -141,9 +154,9 @@ def render_conformance_markdown(result: ConformanceResult,
     add("")
 
     # --- 观测项（附录 B）---------------------------------------------------
+    obs = result.observations or {}   # 附录 A / B 两节共用同一份观测结果
     add("## 4. 观测项（附录 B，标准未设阈值，不做判定）")
     add("")
-    obs = result.observations or {}
     hd = obs.get("trajectory_hausdorff", {})
     if hd.get("mean") is not None:
         add(f"- **轨迹 Hausdorff 均值**：{hd['mean']:.6f} ± {hd['std']:.6f}"
@@ -178,8 +191,119 @@ def render_conformance_markdown(result: ConformanceResult,
         add(f"- 自相关：{ac.get('note', '未计算')}")
     add("")
 
+    # --- 观测项（附录 A 动态性测量）---------------------------------------
+    add("## 5. 观测项（附录 A 动态性测量，标准未设数据阈值，不做判定）")
+    add("")
+    add("- 视频层档位：`--video={}`".format(
+        (obs.get("appendix_a_optical_flow") or {}).get("mode", "未记录")))
+    add("")
+
+    # A.1 光流
+    flow = obs.get("appendix_a_optical_flow") or {}
+    add("### 附录 A.1 帧间光流位移（`—` 信息性输出）")
+    add("")
+    add(f"- 计算状态：`{flow.get('status', '未计算')}`"
+        f"（{_STATUS_LABEL.get(flow.get('status', ''), '')}）")
+    sp = flow.get("sampling") or {}
+    if sp:
+        add(f"- 抽样：{len(sp.get('episodes_sampled') or [])} / "
+            f"{sp.get('total_episodes') or '?'} 个 episode"
+            f"（episode {sp.get('episodes_sampled')}），"
+            f"每 episode 每路相机 {sp.get('video_frame_pairs')} 个相邻帧对，"
+            f"seed={sp.get('seed')}")
+    feat = flow.get("features") or []
+    if feat:
+        add("- 按**特征级**的载荷覆盖情况（不看 videos/ 目录在不在）：")
+        for f in feat:
+            add(f"  - `{f['feature']}`：本地 payload 文件数 {f['file_count']}"
+                f"（{'有' if f['file_count'] else '无'}）")
+    cams = flow.get("cameras") or []
+    if cams:
+        add("")
+        add("| 相机 | fps | p50 (px) | p95 (px) | max (px) | 有效点/总点 | 帧对(用/剔) | 解码帧数 |")
+        add("|---|---|---|---|---|---|---|---|")
+        for c in cams:
+            d = c.get("displacement_px") or {}
+            add(f"| `{c['feature']}` | {_fmt_value(c.get('fps'))} | "
+                f"{_fmt_value(d.get('p50'))} | {_fmt_value(d.get('p95'))} | "
+                f"{_fmt_value(d.get('max'))} | {c['n_valid_points']}/{c['n_total_points']} | "
+                f"{c['n_pairs_used']}/{c['n_pairs_rejected']} | {c['n_frames_decoded']} |")
+        # 剔除原因必须逐条披露：静默丢点会让 statistic 失去可复算性
+        for c in cams:
+            if c.get("decode_errors") or c.get("notes"):
+                add(f"- `{c['feature']}`：")
+                for e in c.get("decode_errors", []):
+                    add(f"  - 解码失败：{e}")
+                for n in c.get("notes", []):
+                    add(f"  - {n}")
+            eps = c.get("episodes") or []
+            if eps:
+                add("")
+                add(f"  `{c['feature']}` 逐 episode 明细（抽样到第几个 episode "
+                    f"必须可核对，不能只给一个聚合值）：")
+                add("")
+                add("  | episode | 载荷文件 | 窗口起点(s) | 解码帧数 | 帧对 | "
+                    "有效点/总点 | p50 | p95 | max |")
+                add("  |---|---|---|---|---|---|---|---|---|")
+                for e in eps:
+                    add(f"  | {e['episode']} | {e['file']} | "
+                        f"{_fmt_value(e.get('start_sec'))} | {e['n_frames_decoded']} | "
+                        f"{e['n_pairs_used']} | {e['n_valid_points']}/{e['n_total_points']} | "
+                        f"{_fmt_value(e['p50'])} | {_fmt_value(e['p95'])} | "
+                        f"{_fmt_value(e['max'])} |")
+    else:
+        add("- 每路相机的位移统计：**无**（见上方状态与 note）")
+    for n in flow.get("notes") or []:
+        add(f"- {n}")
+    if flow.get("dependency_error"):
+        add(f"- 依赖缺失：{flow['dependency_error']}"
+            f"（**本地环境未安装，非数据集缺陷**）")
+    add(f"- 临时文件：{flow.get('temp_files', '未记录')}")
+    add(f"- 剔除规则：{flow.get('reject_rule', '')}")
+    add(f"- 百分位插值方法：{flow.get('percentile_method', '')}")
+    add("")
+
+    # A.2 频谱流量
+    sf = obs.get("appendix_a_spectral_flux") or {}
+    add("### 附录 A.2 频谱流量 SF(t)")
+    add("")
+    add(f"- 公式：`{sf.get('formula', '')}`")
+    add(f"- 适用状态：`{sf.get('status', '未计算')}`"
+        f"（{_STATUS_LABEL.get(sf.get('status', ''), '')}）")
+    stft = sf.get("stft") or {}
+    if sf.get("status") == "MEASURED":
+        add(f"- 特征：`{sf.get('feature')}`"
+            f"（{len(sf.get('per_episode') or [])} 个 episode，"
+            f"共 {sf.get('n_frames')} 个 STFT 帧）")
+        add(f"- SF(t) 统计量：mean {_fmt_value(sf.get('mean'))} / "
+            f"p50 {_fmt_value(sf.get('p50'))} / p95 {_fmt_value(sf.get('p95'))} / "
+            f"max {_fmt_value(sf.get('max'))}")
+        add(f"- STFT 参数：窗 {stft.get('window')}，nperseg={stft.get('nperseg')}，"
+            f"hop={stft.get('hop')}（{stft.get('note', '')}）")
+    if sf.get("note"):
+        add(f"- {sf['note']}")
+    add("")
+
+    # A.3 点云动态性
+    pc = obs.get("appendix_a_pointcloud_dynamics") or {}
+    add("### 附录 A.3 点云运动动态性 D(t)")
+    add("")
+    add(f"- 公式：`{pc.get('formula', '')}`")
+    add(f"- 适用状态：`{pc.get('status', '未计算')}`"
+        f"（{_STATUS_LABEL.get(pc.get('status', ''), '')}）")
+    if pc.get("status") == "MEASURED":
+        add(f"- 特征：`{pc.get('feature')}`"
+            f"（{len(pc.get('per_episode') or [])} 个 episode，"
+            f"共 {pc.get('n_frames')} 帧）")
+        add(f"- D(t) 统计量：mean {_fmt_value(pc.get('mean'))} / "
+            f"p50 {_fmt_value(pc.get('p50'))} / p95 {_fmt_value(pc.get('p95'))} / "
+            f"max {_fmt_value(pc.get('max'))}")
+    if pc.get("note"):
+        add(f"- {pc['note']}")
+    add("")
+
     # --- 生效阈值 ----------------------------------------------------------
-    add("## 5. 本次判定生效的阈值")
+    add("## 6. 本次判定生效的阈值")
     add("")
     prof = result.profile or {}
     ths = prof.get("thresholds", {})
@@ -202,17 +326,22 @@ def render_conformance_markdown(result: ConformanceResult,
     add("- 委托方声明值：可行解空间最大距离"
         f"（{'已声明' if _declared_ws(prof, result) else '未声明'}，"
         "未声明时 6.2.3.4 a 判 UNDETERMINED，不得由实测值反推）")
+    alpha = prof.get("exposure_fraction")
+    add("- 委托方声明值：曝光分数 α（曝光时间/帧周期）"
+        + (f"**已声明 = {alpha:g}**" if alpha is not None else "**未声明**")
+        + "，未声明时 6.2.5.2 a) 1) 只做单边判定：光流位移 p95 ≤ 5 px 判 PASS，"
+          "> 5 px 判 UNDETERMINED（绝不判 FAIL，因为没有 α 就排除不掉 L 仍 ≤ 5 px）")
     add("")
 
     # --- 数据集事实 --------------------------------------------------------
-    add("## 6. 数据集事实（用于复核）")
+    add("## 7. 数据集事实（用于复核）")
     add("")
     for k, v in (result.dataset_info or {}).items():
         add(f"- {k}: {_fmt_value(v)}")
     add("")
 
     # --- 门禁与遗留 --------------------------------------------------------
-    add("## 7. 门禁状态与遗留项")
+    add("## 8. 门禁状态与遗留项")
     add("")
     gate = result.coverage_gate or {}
     add(f"- coverage 门禁：enabled={gate.get('enabled')}，"

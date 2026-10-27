@@ -6,6 +6,7 @@ a module here that exposes ``STANDARD_ID`` and ``all_thresholds()``.
 from __future__ import annotations
 
 from rda.conform.standards.gbz218_1 import (  # noqa: F401
+    APPENDIX_A_RECOMMENDED,
     BINDING_ADVISORY,
     BINDING_INFORMATIONAL,
     BINDING_MANDATORY,
@@ -13,13 +14,12 @@ from rda.conform.standards.gbz218_1 import (  # noqa: F401
     STANDARD_TITLE,
     CORE_FIELDS,
     FRAME_LOSS_FACTOR,
-    VIDEO_PIXEL_LAYER_CHECKS,
-    VIDEO_PIXEL_LAYER_NOTE,
     Threshold,
     all_thresholds,
 )
 
 __all__ = [
+    "APPENDIX_A_RECOMMENDED",
     "BINDING_ADVISORY",
     "BINDING_INFORMATIONAL",
     "BINDING_MANDATORY",
@@ -27,8 +27,6 @@ __all__ = [
     "STANDARD_TITLE",
     "CORE_FIELDS",
     "FRAME_LOSS_FACTOR",
-    "VIDEO_PIXEL_LAYER_CHECKS",
-    "VIDEO_PIXEL_LAYER_NOTE",
     "Threshold",
     "all_thresholds",
 ]

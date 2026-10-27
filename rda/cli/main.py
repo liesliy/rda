@@ -709,6 +709,22 @@ def _parse_workspace_bounds(text: Optional[str]):
     ),
 )
 @click.option(
+    "--video",
+    "video",
+    type=click.Choice(["sample", "full", "off"], case_sensitive=False),
+    default="sample",
+    show_default=True,
+    help=(
+        "How far to go into the video pixel layer (6.2.5.2 a) 1) motion blur "
+        "and Appendix A dynamics). 'sample' (default) samples "
+        "sampling.video_episodes episodes x sampling.video_frame_pairs frame "
+        "pairs per camera; 'full' walks every episode (slow — the sample size "
+        "is disclosed in the report); 'off' skips the pixel layer entirely, "
+        "leaving those items UNDETERMINED rather than implying they were "
+        "checked. Decoding streams from the mp4 in memory: no temp files."
+    ),
+)
+@click.option(
     "-v",
     "--verbose",
     is_flag=True,
@@ -723,6 +739,7 @@ def conform(
     output_format: str,
     out_dir: Optional[Path],
     strict_coverage: bool,
+    video: str,
     verbose: bool,
 ) -> None:
     """Assess a dataset against GB/Z 218.1-2026 and issue four-state verdicts.
@@ -744,6 +761,8 @@ def conform(
       rda conform ./ds --format json --out ./reports
       rda conform ./ds --workspace-bounds "-0.5,0.5,-0.5,0.5,0.0,0.6"
       rda conform ./ds --profile my_thresholds.json
+      rda conform ./ds --video=sample      # default: pixel layer sampled
+      rda conform ./ds --video=off         # pixel layer stays UNDETERMINED
 
     \b
     Exit codes:
@@ -791,12 +810,15 @@ def conform(
         workspace_bounds=bounds,
         workspace_max_distance=max_distance,
         strict_coverage=strict_coverage,
+        video=video.lower(),
     )
 
     if verbose:
         click.echo(f"Dataset : {path_str}")
         click.echo(f"Standard: {standard}")
         click.echo(f"Profile : {profile.source or 'built-in defaults'}")
+        click.echo(f"Video   : --video={video.lower()}"
+                   f"（{'pixel layer 抽样' if video.lower() == 'sample' else ('pixel layer 全量' if video.lower() == 'full' else '不读取 pixel layer，相关项判 UNDETERMINED')}）")
         if max_distance is not None:
             click.echo(f"Feasible-space max distance: {max_distance}")
         click.echo("")

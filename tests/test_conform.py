@@ -241,7 +241,11 @@ def test_four_states_all_appear_in_one_run(tmp_path: Path):
     assert h.verdict == Verdict.UNDETERMINED
     assert h.value is None
     assert "可行解空间" in h.note
-    assert item(result, "video_pixel_layer_checks").verdict == Verdict.NOT_APPLICABLE
+    # 视频层已实现（v0.11.0），但这份本地副本没有 videos/ 载荷：必须判
+    # UNDETERMINED —— "没查"不许伪装成 PASS，也不许记成数据集的 FAIL。
+    mb = item(result, "motion_blur_kernel_px")
+    assert mb.verdict == Verdict.UNDETERMINED
+    assert "本地副本不完整" in mb.note
 
 
 def test_pass_state_is_reachable(tmp_path: Path):
@@ -262,12 +266,12 @@ def test_pass_state_is_reachable(tmp_path: Path):
     assert result.summary["mandatory_fail"] == 0
 
 
-def test_not_applicable_for_video_pixel_layer(tmp_path: Path):
-    """视频像素层判定本轮未实现 → NOT_APPLICABLE + 明确说明。"""
+def test_motion_blur_not_applicable_without_video_features(tmp_path: Path):
+    """数据集根本没声明视频流特征 → NOT_APPLICABLE（条款无从适用）。"""
     ds = write_dataset(tmp_path / "ds")
-    it = item(run_conformance(ds), "video_pixel_layer_checks")
+    it = item(run_conformance(ds), "motion_blur_kernel_px")
     assert it.verdict == Verdict.NOT_APPLICABLE
-    assert "需要视频像素层，本版本未实现" in it.note
+    assert "未声明" in it.note
 
 
 def test_undetermined_states_are_not_counted_as_pass(tmp_path: Path):

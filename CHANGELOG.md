@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.11.0 - 2026-10-27
+
+新增**视频像素层**（6.2.5.2 a) 1) 运动模糊核长度 + 附录 A 动态性测量）。0.10.x 里这一层是一个三合一的 `NOT_APPLICABLE` 占位项，本版把它换成一条真判定和三条例行观测。
+
+### Added
+- **新模块 `rda/conform/video.py`** —— 解码与光流底座：
+  - `av` / `cv2` 双延迟导入，缺失时按 `DatasetView._require_pyarrow` 同款模式降级（`av_available` / `cv2_available` 置 False + `ImportError`），note 明写"本地环境未安装 av，非数据集缺陷"。
+  - **原分辨率**区间解码：`rda/metrics/visual_integrity.py:99` 的 `_decode_span_gray` 会缩到 64×64，那个尺寸足以判冻结/抖动，但**抹掉了 5 px 尺度的核长度信息**，因此新解码器不降采样（可选轻度高斯平滑只做前处理，尺寸不变）。
+  - fps **只从容器元数据读**（`average_rate` → `base_rate` → `guessed_rate`），读不到即 `None` → 上层 `UNDETERMINED`。**不假定 30 或 60**。
+  - Lucas-Kanade 金字塔光流（`goodFeaturesToTrack` + `calcOpticalFlowPyrLK`，附录 A.1 明文允许）；可靠性判据为 `status==1` 且位移 < 图像对角线 × 10%，**被剔除的点与帧一律计数并进报告，不静默丢弃**。
+  - **全程内存内 seek + decode，不落盘任何临时文件**（比"下载后删除"更干净，也避开 90 GB 数据集的磁盘问题）。
+- **`motion_blur_kernel_px` 判定项**（条款 6.2.5.2 a) 1)，宜，限值 5 px）。标准给限值不给方法，本实现的口径是**光流上界法**：帧间光流位移 d 是模糊核长度 L 的几何上界，`L = α·d`，`α = 曝光时间/帧周期 ≤ 1`，出处 David Korcak & Jiri Matas, *Video shutter angle estimation using optical flow and linear blur*, arXiv:2303.10247（CVWW 2024）。三条支路：
+  1. 视频不可得 / `--video=off` / av+cv2 缺失 → `UNDETERMINED`（措辞沿用"本地副本不完整，非数据集本身缺陷"）；
+  2. α 已由委托方声明 → `L = α·d`，双边判 PASS / FAIL；
+  3. α 未声明 → `d ≤ 5 px` 判 PASS（`value` 留 `None`，因为没测出核长度，只测出上界）；`d > 5 px` **判 `UNDETERMINED`，绝不判 FAIL**（没有 α 就排除不掉 L 仍 ≤ 5 px）。
+  - 红线已写进 method：**不使用** `visual_quality.py:64` 的 Laplacian 方差等清晰度代理指标——那类指标分不清散焦与运动拖尾，拿来比 5 px 就是方法不符。
+- **附录 A 三项观测**（报告第 4 章，binding `—`，**不产 PASS/FAIL**）：`appendix_a_optical_flow`（A.1，p50/p95/max + 有效点/总点 + 剔除帧数）、`appendix_a_spectral_flux`（A.2 公式 A.2）、`appendix_a_pointcloud_dynamics`（A.3 公式 A.3）。理由：7.2.6 a) 是对**评价方法**的要求，不是数据属性，因此不构成符合性判定。
+- **CLI**：`rda conform --video=sample|full|off`，**默认 sample**。sample = `sampling.video_episodes` 个 episode × 每路相机 × `sampling.video_frame_pairs` 帧对；full = 全部 episode（帧对数仍受限）；off = 不读像素，相关项全部 `UNDETERMINED`。
+- **profile**：`sampling.video_episodes=2`、`sampling.video_frame_pairs=8`（沿用 seed=0 的 `Sampler`）；新增顶层 `exposure_fraction`（口径 `ORIGIN_DECLARED`，标准把曝光时间交给数据提供方，工具不得代为取值）。JSON profile 仍不引 pyyaml。
+- **`motion_blur_kernel_px` 补进 `all_thresholds()`**：该阈值自 0.10.0 起存在却没注册，profile 覆盖不到它——它是唯一一个有条款、有限值却不受 profile 控制的判定项。
+- **报告**：新增 `## 5. 观测项（附录 A 动态性测量）`（含逐相机表格 + **逐 episode 明细** + 按特征级的载荷覆盖表 + 剔除规则 + 百分位插值方法 + 临时文件声明），原 5/6/7 章顺延为 6/7/8。
+- **`video` 可选依赖组**扩展为 `["av>=12.0", "opencv-python-headless>=4.8,<5"]`（opencv 上界沿用 `pii` 组的实测依据：4.14.0 自带 Haar 级联 XML，5.0.0 一个都不带）。
+
+### Changed
+- **0.10.0 中"本版本不得声称符合附录 A"的表述已作废**，按实现状况如实改为：**A.1 已实现（LK 金字塔）；A.2 仅适用于音频模态；A.3 仅适用于含点云的数据集**。
+- **抽样池按 episode 的 `file_index` 严格找文件**：`videos/<feature>/chunk-*/file-<idx>.mp4` 找不到就跳过该 episode 并披露，**不许拿同特征的另一个 mp4 顶替**——同一个文件里多个 episode 的 `from/to` 偏移不同，顶替会把别人的画面记成这个 episode 的位移，报告上还看不出来。抽样只在"本地可核验的那部分 episode"里做，并在报告里写明池大小与总 episode 数。
+- **视频层按特征级判断载荷覆盖**：`videos/` 目录在不在不算数，按 `videos/<feature>/**` 的文件数逐个特征判定（本次 `lerobot_folding` 副本只有 base 有文件，正好是一个天然负样本）。
+
+### Removed
+- 三合一占位项 `check_video_pixel_layer` / metric `video_pixel_layer_checks`，以及 `VIDEO_PIXEL_LAYER_CHECKS` / `VIDEO_PIXEL_LAYER_CLAUSES` / `VIDEO_PIXEL_LAYER_NOTE` 三个常量。
+- **占位项里的"曝光异常（过曝/欠曝）"与"帧间分辨率一致性"**：经逐字核对 GB/Z 218.1-2026 全文，**标准中没有这两条要求**，所谓"条款号待补录"永远补不上——留着等于把凑不出条款号的自选指标挂在国标名下，故移除。
+
+### Tests
+- `tests/test_conform_video.py`（11 项）：**合成真 mp4 验证光流数值精度**——每帧平移 3 px 的方块视频，解码跑光流，libx264 与 mpeg4 两种编码器下恢复位移均为 **3.0000 px（真值 3.0，误差 0.0000 px < 0.5 px 容差）**；另覆盖依赖缺失降级、假 mp4 / 无视频轨 / 帧率不可知 / 不产生临时文件。
+- `tests/test_conform_video_checks.py`（20 项）：三条支路开关锁（含"d > 5 且 α 未声明 → UNDETERMINED 而非 FAIL"、α=0.2/0.9 的 PASS/FAIL 换算、profile 覆盖阈值生效）、per-feature 部分载荷、缺文件不借用、`--video=sample|full|off` 三档 CLI、报告章节编号与逐 episode 明细。
+- 全量：**407 passed, 5 skipped, 0 failed**（基线 376 passed, 5 skipped）。
+
+### 真实数据集回归（`lerobot_folding`，1200 episode / 30 fps）
+- `rda conform --video=sample` 端到端 **15.2 s**（其中视频层约 4.1 s，其余为附录 B 的 Hausdorff/DTW）；`--video=full` 端到端 **15.3 s**（10 个可核验 episode 全部跑完，视频层 4.4 s）。
+- 只有 `observation.images.base` 有本地载荷文件（1 个 file-000.mp4，容器元数据 fps **30.0**，含 episode 0–9），`left_wrist` / `right_wrist` payload 文件数 **0** → 未参与判定，报告按特征级披露。
+- `--video=full` 实测（10 episode × 8 帧对 × 每帧最多 200 个跟踪点）：base 聚合 p50 **0.5421** / p95 **7.6327** / max **75.0426** px，有效跟踪点 15262/15281，剔除帧对 0。逐 episode：ep0 p50 **2.5529** / p95 **10.9739** / max **16.2708**；ep1 p50 **0.6579** / p95 **6.5637** / max **19.2846**。
+- 判定结论：`UNDETERMINED` —— p95 = 7.6327 px（full）/ 14.6533 px（sample 抽到 ep6、ep7）超过 5 px，而委托方未声明曝光分数 α，**不许判 FAIL**。附上 `--profile` 声明 α 即可转为可裁定结论。
+- 抽样：sample 档 seed=0 抽到 episode [6, 7]（抽样池 10 / 总 1200）。
+
+### 已知边界（不掩饰）
+1. **附录 A 三项不是判定项**：A.1 已实现；**A.2 仅适用于音频模态**（标准 A.2 原文通篇讲"音频信号"，本工具不把视频帧的 2D FFT 拿去算 SF(t) 冒充）；**A.3 仅适用于含三维点云特征的数据集**。无相应模态时记 `NOT_APPLICABLE`。
+2. **以下参数是工程口径（非标准值）**，报告已标注：对角线的 10% 剔除门限、单帧对最少 5 个有效点、每帧最多 200 个跟踪点、"取各相机 p95 的最大值"的聚合方式、STFT 窗（Hann，nperseg=512，hop=256）。
+3. **上界法的假设与失效场景**（已写进 method）：假设全局快门、帧内运动近似匀速、曝光时间 ≤ 帧周期；滚动快门（逐行有效 α 不同）、剧烈非匀速运动、遮挡边界粗大运动、相机自运动与被跟踪物体运动不可分离时，d 不再是该点模糊核长度的上界。
+4. **本次结论只对抽到的 episode 成立**：本地副本只有 10 个 episode 有视频载荷（总 1200），不得外推到整个数据集。
+5. **A.2 / A.3 在本数据集上没有任何实测数字**（无音频、无点云），只有"不适用"——没有数字不等于测过了。
+6. **coverage 门禁仍是桩**：`--strict-coverage` 只记录，不触发退出码 3。
+7. 本工具不声称数据集合规。GB/Z 218.1-2026 是**国家标准化指导性技术文件**，本身不具有强制性（《国家标准化指导性技术文件管理规定》第九条）；conform 产出的是**可复核的判定依据**，不是认证证书。
+
 ## 0.10.1 - 2026-10-27
 
 纯修复版，不动任何判定阈值、指标集合或 CLI 行为。合规结论与 0.10.0 完全一致。
