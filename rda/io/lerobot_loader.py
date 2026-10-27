@@ -462,7 +462,8 @@ def _try_lerobot_import():
 # misleading "pip install lerobot" one (v0.6.0).
 _MISSING_PARQUET_DEPS = (
     "Direct parquet reading requires pandas and pyarrow. "
-    "Install them with: pip install pandas pyarrow"
+    'Install them with: pip install "robot-data-audit[parquet]" '
+    "(or: pip install pandas pyarrow)"
 )
 
 

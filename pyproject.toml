@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robot-data-audit"
-version = "0.10.0"
+version = "0.10.1"
 description = "Robot Data Audit (RDA) - Quality auditing tool for robot datasets"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -28,6 +28,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The LeRobot reader has two independent paths: the `lerobot` package, and a
+# direct parquet reader that needs only pandas+pyarrow. `rda conform` reads
+# parquet directly, so this group is what a plain install is missing.
+# Verified 2026-10-27: `pip install robot-data-audit` followed by
+# `rda conform <lerobot_dataset>` dies with "pyarrow is required" — pyarrow is
+# otherwise only a transitive dep of lerobot>=0.6, which most users don't want.
+parquet = ["pandas>=2.0", "pyarrow>=14.0"]
 lerobot = ["lerobot>=0.6"]
 video = ["av>=12.0"]
 # Face detection inside pii_scan needs a Haar cascade. Verified 2026-10-13:
@@ -36,7 +43,15 @@ video = ["av>=12.0"]
 pii = ["opencv-python-headless>=4.8,<5"]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.1"]
 ui = ["streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
-all = ["lerobot>=0.6", "av>=12.0", "streamlit>=1.36.0", "plotly>=5.18.0", "pandas>=2.0"]
+all = [
+    "lerobot>=0.6",
+    "av>=12.0",
+    "opencv-python-headless>=4.8,<5",
+    "streamlit>=1.36.0",
+    "plotly>=5.18.0",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+]
 
 [project.scripts]
 rda = "rda.cli.main:cli"

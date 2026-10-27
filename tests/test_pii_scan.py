@@ -16,6 +16,7 @@ These tests defend four things, in priority order:
 from __future__ import annotations
 
 import json
+import os
 
 import numpy as np
 import pytest
@@ -264,11 +265,26 @@ class TestGracefulDegradation:
         assert r.measurement["finding_count"] >= 1
         assert any("opencv-python-headless" in h for h in r.details["not_scanned_detail"])
 
-    def test_opencv_installed_without_cascade_is_recorded(self, monkeypatch):
-        """OpenCV 5.x ships no Haar cascades — must degrade loudly."""
-        import rda.metrics.pii_scan as mod
+    def test_opencv_installed_without_cascade_is_recorded(self, monkeypatch, tmp_path):
+        """OpenCV 5.x ships no Haar cascades — must degrade loudly.
 
-        monkeypatch.setattr(mod, "_resolve_cascade", lambda: None)
+        Rather than monkeypatching ``_resolve_cascade`` (which only works when
+        real cv2 is importable, so the case silently rotted into a failure on
+        any environment without opencv), fake a cv2 whose ``data/haarcascades``
+        directory is empty — exactly the 5.x shape. ``_opencv_missing`` imports
+        cv2 inside the function, so the fake wins whether or not the real
+        package is installed, and the assertion holds in every environment.
+        """
+        import sys
+        import types
+
+        fake_cv2 = types.ModuleType("cv2")
+        empty_cascades = tmp_path / "haarcascades"
+        empty_cascades.mkdir()
+        fake_cv2.data = types.SimpleNamespace(haarcascades=str(empty_cascades) + os.sep)
+        monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+        monkeypatch.delenv("RDA_HAAR_CASCADE", raising=False)
+
         assert _opencv_missing() == "haar_cascade_missing"
 
         r = PIIScanMetric(scan_video=True).compute(_ep())

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.1 - 2026-10-27
+
+纯修复版，不动任何判定阈值、指标集合或 CLI 行为。合规结论与 0.10.0 完全一致。
+
+### Fixed
+- **装了默认包却读不了 LeRobot 数据集**。`pip install robot-data-audit` 之后直接 `rda conform <lerobot_dataset>` 会硬停在 `pyarrow is required` —— 因为 pyarrow 此前只是 `lerobot>=0.6` 的传递依赖，而 base 依赖只有 click / pydantic / numpy / requests。而 `rda conform` 的主要对象恰恰就是 LeRobot parquet 数据集，**默认场景第一步就撞墙**。新增可选依赖组 `parquet = ["pandas>=2.0", "pyarrow>=14.0"]`，两处报错文案改为推荐 `pip install "robot-data-audit[parquet]"`（`rda/conform/engine.py`、`rda/io/lerobot_loader.py`）。`rda/conform/engine.py` 的文案保留 "pandas and pyarrow" 子串，因为 `rda/cli/main.py` 靠它区分"缺 parquet 依赖"与"缺 lerobot"两种提示。
+- **`all` 组漏了 `pii`**：`all` 此前包含 `lerobot/video/ui` 三组却不含 `opencv-python-headless`，装 `all` 不等于装全部。已补齐，并加入 `parquet` 组。
+
+### Fixed (CI)
+- **main 上的 CI 从 0.9.22 起连续三次推送全红**（`cdfe9fa` / `cdd0883` / `75f96ec`）。根因是 `tests/test_pii_scan.py::TestGracefulDegradation::test_opencv_installed_without_cascade_is_recorded`：该用例 monkeypatch 了 `_resolve_cascade`，但 `_opencv_missing()` 先 `import cv2`，CI 没装 opencv 就直接返回 `opencv_missing`，断言 `== "haar_cascade_missing"` 必失败。**测试随环境腐化，不是产品缺陷**。
+  - 用例改为注入一个 `data/haarcascades` 为空的假 cv2 模块（正是 opencv 5.x 的形状），于是无论真实 opencv 在不在，这条"opencv 在但级联缺失"的路径都被覆盖 —— 比加 skip 更好，加 skip 会让最关键的环境反而没有覆盖。
+- 本地镜像 CI 环境（`-e ".[ui,video,pii,parquet]"`）全量复跑：**376 passed, 5 skipped, 0 failed**。
+- 遗留：CI 工作流本身尚未改成安装 `pii`/`parquet` 两组（`.github/workflows/ci.yml` 的改动需要带 `workflow` 权限的 token 才能推送，当前 token 只有 `repo`）。在那之前 CI 仍以"注入假 cv2"的方式覆盖该路径，结论不受影响。
+
 ## 0.10.0 - 2026-10-27
 
 ### Added

@@ -29,7 +29,8 @@ from rda.conform.verdict import ConformanceItem, Verdict, overall_verdict, summa
 
 _MISSING_DEPS_MSG = (
     "pyarrow is required to read LeRobot parquet datasets. "
-    "Install it with: pip install pyarrow"
+    'Install it with: pip install "robot-data-audit[parquet]" '
+    "(or: pip install pyarrow)"
 )
 
 
