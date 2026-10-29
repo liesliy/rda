@@ -13,11 +13,16 @@
 >
 > RDA 是诊断工具，不保证训练成功率提升。
 
-RDA 审计机器人操作数据集（LeRobot 格式），对每一集给出三档判定——
-**PASS / REVIEW / EXCLUDE**——并附测量诊断。适合在验收供应商数据、开训、
+RDA 审计机器人操作数据集（LeRobot 格式），对每一集给出四档判定——
+**PASS / REVIEW / UNVERIFIABLE / EXCLUDE**——并附测量诊断。适合在验收供应商数据、开训、
 或发布 benchmark 之前做一次独立检查。
 
-**当前版本：v0.9.6** —— `pip install robot-data-audit`。
+其中 **UNVERIFIABLE 专指「该查但查不了」**：检查项对这一集适用，而它的输入在本地这份拷贝里
+根本不存在（最常见的是视频没下载）。缺文件不等于数据有问题，但也绝不等于通过——
+请换完整拷贝重跑，或用 `--continue-on-unverifiable` 显式记录这次豁免（报告会写
+`verifiability_override: true`）。文件存在但损坏仍判 EXCLUDE。
+
+**当前版本：v0.11.0** —— `pip install robot-data-audit`。
 
 ## ⭐ 支持 RDA
 
@@ -71,7 +76,7 @@ pip install robot-data-audit
 ## 快速开始
 
 ```bash
-# 1. 审计数据集 —— 五层共 23 个指标，三档判定
+# 1. 审计数据集 —— 五层共 23 个指标，四档判定
 #    默认：Fast Audit（除 visual_quality 外的所有指标）
 rda audit /path/to/lerobot/dataset
 
@@ -95,6 +100,12 @@ measurement/finding，以及数据集级 `acceptance_summary`（P10/P50/P90 基�
 运行时离群值、未检查清单）。`rda recommend` 在本地完成全部指标计算，只把聚合
 统计（<1 KB）发给规则 API——结果本地缓存可离线复用，私有部署可用
 `RDA_API_URL` 指向自己的服务器。
+
+**退出码**：`0` 无 EXCLUDE；`1` 执行出错；`2` 存在 EXCLUDE；`3` 审计完成但
+**实际什么都没审到**（零集，或每集都没有可审计内容——不要当成通过）；
+`4` 存在 UNVERIFIABLE（关键检查对这一集适用，但输入在本地这份拷贝里不存在）。
+`4` 是**未完成**而不是失败：换完整拷贝重跑，或加 `--continue-on-unverifiable`
+让它放行并保留 `verifiability_override: true` 痕迹。
 
 ### 执行层级
 
@@ -129,7 +140,7 @@ episode = EpisodeData(
     meta={"fps": 10, "source": "my/dataset"},
 )
 result = EpisodeAuditor().audit(episode)
-print(result.verdict)                        # PASS / REVIEW / EXCLUDE
+print(result.verdict)                        # PASS / REVIEW / UNVERIFIABLE / EXCLUDE
 for name, metric in result.metrics.items():
     if metric.has_finding:
         print(name, metric.measurement)

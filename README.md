@@ -112,11 +112,16 @@ rda audit /path/to/dataset [OPTIONS]
 | `--blind` | Redact identifying paths and operator-authored free text for externally shareable reports |
 | `--pii-video` | Extend the privacy scan to sampled video frames (needs `[pii]` extra) |
 | `--pii-strict` | Treat privacy findings as an acceptance gate instead of a warning |
+| `--continue-on-unverifiable` | Keep exit 0 when episodes are UNVERIFIABLE instead of failing; records `verifiability_override: true` in the report |
 | `-v, --verbose` | Verbose output |
 
 Exit codes: `0` = no EXCLUDE, `1` = error, `2` = at least one EXCLUDE,
 `3` = audit completed but **nothing was effectively audited** (zero episodes, or
-every episode lacked auditable content) — never report this as a pass.
+every episode lacked auditable content) — never report this as a pass,
+`4` = at least one episode was **UNVERIFIABLE**: a critical check applies to it
+but its input is absent from this copy (typically videos never downloaded).
+Absence is not a pass — re-run on a complete copy, or pass
+`--continue-on-unverifiable` to record the override and keep exit 0.
 
 ---
 
