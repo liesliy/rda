@@ -22,7 +22,7 @@ RDA 审计机器人操作数据集（LeRobot 格式），对每一集给出四�
 请换完整拷贝重跑，或用 `--continue-on-unverifiable` 显式记录这次豁免（报告会写
 `verifiability_override: true`）。文件存在但损坏仍判 EXCLUDE。
 
-**当前版本：v0.11.0** —— `pip install robot-data-audit`。
+**当前版本：v0.12.0** —— `pip install robot-data-audit`。
 
 ## ⭐ 支持 RDA
 

@@ -1,8 +1,6 @@
 # Changelog
 
-## 0.12.0 - 未发布（开发完成，待发版）
-
-> 版本号尚未 bump（`pyproject.toml` / `__init__.py` 仍为 0.11.0）。本条记录的是已落地的代码改动，发版时连同版本号一并处理。
+## 0.12.0 - 2026-10-29
 
 ### Added
 - **判定层第四态 `UNVERIFIABLE`（REQ-15）**：此前 `MetricAvailability` 只有 `available` / `not_available` / `error` 三态，把「检查项不适用」与「检查项适用但输入缺失」混为一谈；`classify_episode()` 对任何非 `AVAILABLE` 的指标一律豁免 verdict。结果是**同一根因的两个相反错误**：
