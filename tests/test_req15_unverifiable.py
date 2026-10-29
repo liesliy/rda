@@ -316,3 +316,58 @@ class TestExitCodes:
         assert saved.get("verifiability_override") is True
         # The verdicts themselves must NOT be rewritten to PASS.
         assert saved["summary"]["verdict_counts"].get("UNVERIFIABLE") == 1
+
+
+# ---------------------------------------------------------------------------
+# REQ-15 (0.12.1): the fourth state must also appear in the *text* report.
+#
+# 0.12.0 shipped the fourth state in JSON only. The text renderer still looped
+# over a hard-coded ["PASS", "REVIEW", "EXCLUDE"], so a dataset where all 50
+# episodes were UNVERIFIABLE printed:
+#
+#     PASS: 0 (0.0%)   REVIEW: 0 (0.0%)   EXCLUDE: 0 (0.0%)
+#
+# i.e. a table of zeros that reads as "nothing to report", while the exit code
+# said 4 and the note at the bottom said the opposite. The verdict table is the
+# most-read part of the report; leaving the fourth state out of it is the same
+# class of defect REQ-15 exists to kill ("unknown != pass"), just one layer up.
+# ---------------------------------------------------------------------------
+
+def test_text_report_shows_unverifiable_row(tmp_path):
+    from click.testing import CliRunner
+
+    from rda.cli.main import cli
+
+    ds = _write_dataset_without_videos(tmp_path / "ds_txt")
+    res = CliRunner().invoke(cli, ["audit", str(ds), "--format", "text"])
+    assert res.exit_code == 4, res.output[-600:]
+
+    verdict_lines = [
+        ln for ln in res.output.splitlines()
+        if any(k in ln for k in ("PASS:", "REVIEW:", "EXCLUDE:", "UNVERIFIABLE:"))
+    ]
+    assert any("UNVERIFIABLE:" in ln for ln in verdict_lines), verdict_lines
+    # And it must carry the real count, not a placeholder zero.
+    unv = [ln for ln in verdict_lines if "UNVERIFIABLE:" in ln][0]
+    assert " 1 " in unv or unv.rstrip().split()[-2].isdigit(), unv
+    # The zero PASS row must not be mistaken for the whole story.
+    assert any("PASS:" in ln and " 0 " in ln for ln in verdict_lines), verdict_lines
+
+
+def test_text_summary_omits_unverifiable_row_when_zero():
+    """No extra all-zero row on healthy datasets — noise erodes the signal."""
+    from rda.report.summary import AuditSummary, format_summary_text
+
+    clean = AuditSummary(
+        total_episodes=10,
+        verdict_counts={"PASS": 10, "REVIEW": 0, "EXCLUDE": 0, "UNVERIFIABLE": 0},
+    )
+    assert "UNVERIFIABLE" not in format_summary_text(clean)
+
+    dirty = AuditSummary(
+        total_episodes=10,
+        verdict_counts={"PASS": 0, "REVIEW": 0, "EXCLUDE": 0, "UNVERIFIABLE": 10},
+    )
+    out = format_summary_text(dirty)
+    assert "UNVERIFIABLE" in out
+    assert "UNVERIFIABLE   : 10" in out

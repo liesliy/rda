@@ -218,10 +218,15 @@ def format_enhanced_summary_text(result: DatasetAuditResult) -> str:
 
     # --- Verdict ---
     lines.append("  ── Verdict ──")
-    for verdict in ["PASS", "REVIEW", "EXCLUDE"]:
+    # REQ-15: the fourth state. Only surfaced when it actually occurred —
+    # a dataset with nothing unverifiable must not grow an extra all-zero row.
+    verdict_rows = ["PASS", "REVIEW", "EXCLUDE"]
+    if compact.verdict_counts.get(AuditVerdict.UNVERIFIABLE.value, 0):
+        verdict_rows.append("UNVERIFIABLE")
+    for verdict in verdict_rows:
         count = compact.verdict_counts.get(verdict, 0)
         pct = (count / total * 100) if total > 0 else 0.0
-        lines.append(f"  {verdict + ':':8s} {count:>3d} ({pct:>4.1f}%)")
+        lines.append(f"  {verdict + ':':14s} {count:>3d} ({pct:>4.1f}%)")
     lines.append("")
 
     # ── Integrity Gate (L1) ──
@@ -558,9 +563,12 @@ def format_summary_text(summary: AuditSummary) -> str:
         "",
         "  Verdict breakdown:",
     ]
-    for verdict in ["PASS", "REVIEW", "EXCLUDE"]:
+    verdict_rows = ["PASS", "REVIEW", "EXCLUDE"]
+    if summary.verdict_counts.get(AuditVerdict.UNVERIFIABLE.value, 0):
+        verdict_rows.append("UNVERIFIABLE")
+    for verdict in verdict_rows:
         count = summary.verdict_counts.get(verdict, 0)
-        lines.append(f"    {verdict:8s} : {count}")
+        lines.append(f"    {verdict:14s} : {count}")
     if summary.failing_metrics:
         lines.append("")
         lines.append("  Top failing metrics:")
