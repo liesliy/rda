@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.12.1 - 2026-10-29
+
+### Fixed
+- **text 报告补上第四态 UNVERIFIABLE（REQ-15 收尾）**。0.12.0 把第四态接进了判定层、
+  JSON 契约与退出码，但**漏了 text 渲染器**——`rda/report/summary.py` 里两处 verdict
+  循环仍硬编码 `["PASS", "REVIEW", "EXCLUDE"]`：
+
+  - `format_enhanced_summary_text()`（主报告）
+  - `format_summary_text()`（对外库 API）
+
+  而 `--format` 的**默认值就是 `text`**，所以这是默认路径而非边缘场景。对
+  `aloha_insertion`（声明视频、本地 0 个 mp4，50/50 UNVERIFIABLE）这类数据集，
+  0.12.0 的默认输出是：
+
+  ```
+  ── Verdict ──
+  PASS:      0 ( 0.0%)
+  REVIEW:    0 ( 0.0%)
+  EXCLUDE:   0 ( 0.0%)
+  ```
+
+  三行零读起来是「没事」，而退出码是 4、底部注释写着「不可视为干净」。JSON 报告
+  是对的，只有 text 漏——人手跑的人不会去看退出码，所以这张表比 JSON 字段更容易
+  造成误读。
+
+  修复方式：两处循环改为**按需追加**第四态，仅当 `count > 0` 时显示，健康数据集
+  不会多出一行零（避免用噪音换存在感）；列宽 8 → 14 以容纳 13 字符的
+  `UNVERIFIABLE:`。
+
+  修后同一数据集输出：
+
+  ```
+  ── Verdict ──
+  PASS:            0 ( 0.0%)
+  REVIEW:          0 ( 0.0%)
+  EXCLUDE:         0 ( 0.0%)
+  UNVERIFIABLE:   50 (100.0%)
+  ```
+
+- 新增 2 项回归测试钉住上述行为：text 输出必须带第四态的**真实计数**；
+  UNVERIFIABLE = 0 时该行必须不出现。全量 **432 passed / 5 skipped**（较 0.12.0 的
+  430 多出这 2 项）。
+
+### 说明
+- 判定逻辑、JSON 契约（schema 1.5）、退出码 0–4、`verifiability_override` 语义
+  **均未改变**，0.12.1 只动渲染层。
+- 从 0.12.0 升级无需改调用方式；已生成的 JSON 报告不受影响。
+
 ## 0.12.0 - 2026-10-29
 
 ### Added
