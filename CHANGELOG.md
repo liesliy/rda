@@ -26,7 +26,7 @@
 ### Tests
 - 新增 `tests/test_req15_unverifiable.py`（17 项）：结果类型契约、四态优先级、reasons 提取、端到端数据集、CLI 退出码与 override 留痕。
 - golden 新增 `video_corrupt_camera_stream`：**文件存在但损坏仍判 EXCLUDE**，钉住边界，防止本次修复演变成过度降级。
-- 全量 **312 passed / 5 skipped / 0 failed**。
+- 全量 **430 passed / 5 skipped / 0 failed**（基线 412 passed / 5 skipped，本版新增 17 项 + golden 1 例）。
 
 ### Known gaps
 - `conform` 子命令（0.10.0 引入，4,860 行）自 PyPI 包回填至本仓库；**其测试、CHANGELOG 0.10/0.11 条目与 docs 尚未同步**，联网恢复后需 `git pull` 校准。
