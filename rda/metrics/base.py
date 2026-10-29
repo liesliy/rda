@@ -43,6 +43,32 @@ class MetricAvailability(str, Enum):
     ERROR = "error"
 
 
+class Verifiability(str, Enum):
+    """Whether the metric's conclusion can be trusted for this episode.
+
+    ``availability`` answers *"could this metric run?"*; ``verifiability``
+    answers *"does the answer mean anything?"*. They are deliberately kept
+    separate because :attr:`MetricAvailability.NOT_AVAILABLE` conflates two
+    situations that must be treated differently by the verdict engine:
+
+    Attributes:
+        VERIFIABLE: The metric ran and its conclusion is meaningful. This is
+            the default, so every existing metric keeps its current behaviour.
+        UNVERIFIABLE: The check applies to this dataset but the required input
+            is missing **locally** — e.g. the schema declares three cameras and
+            only one is downloaded. The correct verdict is "not judged", never
+            "passed": offline we cannot tell "upstream lacks it" from "I did
+            not fetch it".
+        NOT_APPLICABLE: The check is meaningless for this kind of data — e.g.
+            cross-camera synchronisation on a single-camera dataset. Exempt
+            from the verdict, exactly as today.
+    """
+
+    VERIFIABLE = "verifiable"
+    UNVERIFIABLE = "unverifiable"
+    NOT_APPLICABLE = "not_applicable"
+
+
 class AssessmentStatus(str, Enum):
     """Outcome of the metric assessment.
 
@@ -53,6 +79,11 @@ class AssessmentStatus(str, Enum):
         EXCLUDE: Deterministic error — data is structurally unusable.
         SKIPPED: Computation was skipped due to an upstream failure.
         NA: Not applicable — required data not available.
+        UNVERIFIABLE: Input was missing locally, so nothing could be judged.
+            Differs from NA: the check *does* apply to this dataset, we simply
+            could not run it. Paired with
+            :attr:`Verifiability.UNVERIFIABLE`; the verdict engine must never
+            collapse it into PASS.
     """
 
     PASS = "pass"
@@ -60,6 +91,7 @@ class AssessmentStatus(str, Enum):
     EXCLUDE = "exclude"
     SKIPPED = "skipped"
     NA = "na"
+    UNVERIFIABLE = "unverifiable"
 
 
 @dataclass
@@ -90,6 +122,7 @@ class MetricResult:
     z_score: Optional[float] = None
     percentile: Optional[float] = None
     has_finding: bool = False
+    verifiability: Verifiability = Verifiability.VERIFIABLE
 
     # --- Backward-compatible read-only properties ---
 
@@ -140,6 +173,7 @@ class MetricResult:
             z_score=float(z_score),
             percentile=float(percentile),
             has_finding=self.has_finding,
+            verifiability=self.verifiability,
         )
 
     # --- Convenience constructors ---
@@ -239,6 +273,37 @@ class MetricResult:
             assessment={"status": "skipped", "severity": "high", "reason": reason},
             details=details or {},
             message=message,
+        )
+
+    @classmethod
+    def make_unverifiable(cls, name: str, reason: str = "",
+                          message: str = "", details: Dict[str, Any] | None = None) -> MetricResult:
+        """Construct an UNVERIFIABLE result — the check applies but input is absent.
+
+        This is the crux of REQ-15. A declared-but-absent video file is *not*
+        the same thing as a corrupt one:
+
+          - file does not exist -> UNVERIFIABLE (we cannot tell whether upstream
+            has it, because we are offline);
+          - file exists but cannot be decoded -> still EXCLUDE, because the file
+            we do have is genuinely broken.
+
+        ``has_finding`` stays ``False``: nothing was *found*, we simply could
+        not look. The verdict engine keys off :attr:`verifiability`, not off
+        ``has_finding``, which is what previously let these slip through as PASS.
+        """
+        return cls(
+            name=name,
+            availability=MetricAvailability.NOT_AVAILABLE,
+            measurement={},
+            assessment={
+                "status": AssessmentStatus.UNVERIFIABLE.value,
+                "severity": None,
+                "reason": reason,
+            },
+            details=details or {},
+            message=message,
+            verifiability=Verifiability.UNVERIFIABLE,
         )
 
 

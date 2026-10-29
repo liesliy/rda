@@ -80,6 +80,10 @@ class AuditSummary:
     failing_metrics: Dict[str, int] = field(default_factory=dict)
     exclude_episodes: List[int] = field(default_factory=list)
     review_episodes: List[int] = field(default_factory=list)
+    # REQ-15: episodes whose critical checks could not be judged at all.
+    # Kept separate from review_episodes — "we did not look" is not "needs
+    # human review", and collapsing the two would hide the former.
+    unverifiable_episodes: List[int] = field(default_factory=list)
 
 
 def build_summary(result: DatasetAuditResult) -> AuditSummary:
@@ -93,6 +97,8 @@ def build_summary(result: DatasetAuditResult) -> AuditSummary:
     for ep_result in result.episodes.values():
         if ep_result.verdict == AuditVerdict.EXCLUDE:
             summary.exclude_episodes.append(ep_result.episode_index)
+        elif ep_result.verdict == AuditVerdict.UNVERIFIABLE:
+            summary.unverifiable_episodes.append(ep_result.episode_index)
         elif ep_result.verdict == AuditVerdict.REVIEW:
             summary.review_episodes.append(ep_result.episode_index)
 
@@ -105,6 +111,7 @@ def build_summary(result: DatasetAuditResult) -> AuditSummary:
 
     summary.failing_metrics = failing_metrics
     summary.exclude_episodes.sort()
+    summary.unverifiable_episodes.sort()
     summary.review_episodes.sort()
 
     return summary

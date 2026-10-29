@@ -354,7 +354,11 @@ class VideoStreamPresenceMetric(MetricBase):
             )
 
         root = Path(dataset_root)
+        # REQ-15: split the old catch-all ``missing`` list into two facts.
+        #   absent -> no file at the resolved path (cannot judge: local gap)
+        #   broken -> file exists but cannot be decoded (hard failure)
         missing: List[str] = []
+        broken: List[str] = []
         verified: List[str] = []
 
         for feature, info in sorted(video_features.items()):
@@ -367,26 +371,42 @@ class VideoStreamPresenceMetric(MetricBase):
                 import av
                 with av.open(str(video_path)) as container:
                     if len(container.streams.video) == 0:
-                        missing.append(feature)
+                        broken.append(feature)
                         continue
                 verified.append(feature)
             except (OSError, ValueError):
-                missing.append(feature)
+                broken.append(feature)
 
         details: Dict[str, Any] = {
             "expected_streams": sorted(video_features.keys()),
             "verified": verified,
             "missing": missing,
+            "broken": broken,
         }
 
-        if missing:
-            return MetricResult.make_exclude(
+        if missing or broken:
+            # A present-but-unreadable file is real corruption, so it outranks
+            # the absent ones and keeps EXCLUDE.
+            if broken:
+                return MetricResult.make_exclude(
+                    name=self.name,
+                    reason="camera_stream_unreadable",
+                    message=(
+                        f"Camera stream(s) present but unreadable: "
+                        f"{', '.join(broken)}. The local copy of the file is "
+                        f"corrupt."
+                    ),
+                    details=details,
+                )
+            # Only absent: offline we cannot tell whether upstream has them,
+            # so this must not become a pass.
+            return MetricResult.make_unverifiable(
                 name=self.name,
-                reason="camera_stream_missing",
+                reason="camera_stream_absent",
                 message=(
-                    f"Camera stream(s) missing or unreadable: "
-                    f"{', '.join(missing)}. Downstream training would lose "
-                    f"these views silently."
+                    f"Declared camera stream file(s) absent from the local "
+                    f"copy: {', '.join(missing)}. Presence upstream could not be "
+                    f"verified offline."
                 ),
                 details=details,
             )

@@ -25,7 +25,7 @@ import pytest
 
 from rda.audit.rules import AuditVerdict, classify_episode
 from rda.io.schema import EpisodeData
-from rda.metrics.base import MetricAvailability, MetricResult
+from rda.metrics.base import MetricAvailability, MetricResult, Verifiability
 from rda.metrics.visual_integrity import (
     VideoFreezeMetric,
     VideoStreamPresenceMetric,
@@ -223,13 +223,39 @@ class TestVideoStreamPresence:
         r = VideoStreamPresenceMetric().compute(ep)
         assert r.assessment["status"] == "pass"
 
-    def test_missing_camera_is_exclude(self, tmp_path):
+    def test_missing_camera_is_unverifiable(self, tmp_path):
+        """REQ-15: an absent file is not evidence the dataset is broken.
+
+        Before this change the same situation graded EXCLUDE, which on a
+        real dataset (declared 3 cameras, only 1 downloaded) wiped out all
+        1,200 episodes. Offline we cannot tell "upstream lacks it" from
+        "not downloaded", so the honest verdict is "could not judge".
+        """
         ep = _make_episode(tmp_path, cameras={"cam_a": None, "cam_b": None})
         # Remove the second camera's file → unresolvable stream.
         (Path(ep.meta["dataset_root"]) / "videos" / "cam_b" / "chunk-000"
          / "file-000.mp4").unlink()
         r = VideoStreamPresenceMetric().compute(ep)
+        assert r.assessment["status"] == "unverifiable"
+        assert r.verifiability == Verifiability.UNVERIFIABLE
+        assert r.has_finding is False, (
+            "nothing was found — the check could not run"
+        )
+
+    def test_corrupt_camera_is_exclude(self, tmp_path):
+        """REQ-15 boundary: present-but-undecodable stays a hard failure.
+
+        Without this test the change above would be an over-correction —
+        any missing *or* broken file would silently become "unverifiable"
+        and genuine corruption would stop failing the gate.
+        """
+        ep = _make_episode(tmp_path, cameras={"cam_a": None, "cam_b": None})
+        p = (Path(ep.meta["dataset_root"]) / "videos" / "cam_b"
+             / "chunk-000" / "file-000.mp4")
+        p.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\xff" * 128)
+        r = VideoStreamPresenceMetric().compute(ep)
         assert r.assessment["status"] == "exclude"
+        assert r.verifiability == Verifiability.VERIFIABLE
 
     def test_single_camera_is_na(self, tmp_path):
         ep = _make_episode(tmp_path, cameras={"only_cam": None})

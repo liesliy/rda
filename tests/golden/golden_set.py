@@ -322,6 +322,7 @@ def _video_episode(
     num_frames: int = 64,
     span_ratio: float = 1.0,
     delete_cam: Optional[str] = None,
+    corrupt_cam: Optional[str] = None,
 ) -> EpisodeData:
     from pathlib import Path
 
@@ -332,6 +333,11 @@ def _video_episode(
         _write_video(fpath, n_frames=num_frames, freeze=freeze, fps=FPS)
         if delete_cam == cam:
             fpath.unlink()
+        elif corrupt_cam == cam:
+            # REQ-15 boundary case: the file is *present* but not decodable.
+            # This must remain a hard EXCLUDE — only an absent file is allowed
+            # to degrade to UNVERIFIABLE.
+            fpath.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\xff" * 128)
         video_features[cam] = {
             "chunk_index": 0,
             "file_index": 0,
@@ -378,6 +384,11 @@ def build_video_scenarios(tmp_path) -> List[GoldenScenario]:
                               {"cam_a": None, "cam_b": None},
                               delete_cam="cam_b")
 
+    def _corrupt_cam():
+        return _video_episode(base / "v_corrupt", 4,
+                              {"cam_a": None, "cam_b": None},
+                              corrupt_cam="cam_b")
+
     def _frozen_video():
         # 20-frame stall of 32 -> conclusive freeze (L1 exclude).
         return _video_episode(base / "v_freeze", 2,
@@ -398,8 +409,23 @@ def build_video_scenarios(tmp_path) -> List[GoldenScenario]:
         ),
         GoldenScenario(
             id="video_missing_camera_stream",
-            description="One camera file deleted: silent modality loss (L1 exclude).",
+            description=(
+                "One camera file absent locally. REQ-15: offline we cannot tell "
+                "'upstream lacks it' from 'not downloaded', so this is "
+                "unverifiable — never a pass, never a hard exclude."
+            ),
             builder=_missing_cam,
+            video=True,
+            expected_verdict="unverifiable",
+            must_trigger=("video_stream_presence",),
+        ),
+        GoldenScenario(
+            id="video_corrupt_camera_stream",
+            description=(
+                "One camera file present but undecodable: the copy we have is "
+                "broken, so this stays a hard L1 exclude (REQ-15 boundary)."
+            ),
+            builder=_corrupt_cam,
             video=True,
             expected_verdict="exclude",
             must_trigger=("video_stream_presence",),

@@ -24,7 +24,7 @@ import numpy as np
 
 from rda.audit.dataset_audit import DatasetAuditResult
 from rda.audit.rules import AuditVerdict, compute_behavior_severity
-from rda.metrics.base import MetricAvailability
+from rda.metrics.base import MetricAvailability, Verifiability
 from rda.metrics.pii_scan import redact_text
 from rda.report.aggregation import aggregate_dataset_metrics
 from rda.report.summary import build_summary
@@ -112,6 +112,17 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
         getattr(ep_result, "task_description", None)
     )
 
+    # REQ-15: mirror ``exclude_reasons`` for the new verdict, so an
+    # UNVERIFIABLE episode says *what* could not be judged rather than leaving
+    # the reader to diff metric blobs.
+    from rda.audit.rules import get_unverifiable_reasons
+
+    unverifiable_reasons = (
+        get_unverifiable_reasons(list(ep_result.metrics.values()))
+        if ep_result.verdict == AuditVerdict.UNVERIFIABLE
+        else []
+    )
+
     return {
         "episode_index": ep_result.episode_index,
         "num_frames": ep_result.num_frames,
@@ -120,6 +131,7 @@ def _episode_result_to_dict(ep_result) -> Dict[str, Any]:
         "task_description": task_text,
         "task_description_redacted": task_redacted,
         "exclude_reasons": getattr(ep_result, "exclude_reasons", []),
+        "unverifiable_reasons": unverifiable_reasons,
         "metrics": metrics_dict,
     }
 
@@ -170,12 +182,33 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
 
     # D-17 (v0.9.4): execution tier metadata
     execution_tier = getattr(result, "execution_tier", None)
-    video_quality_executed = getattr(result, "video_quality_executed", False)
+    # REQ-16: the tier constant only records what we *intended* to run. Ask the
+    # metric results what actually happened — otherwise a dataset with zero
+    # local mp4s is still described as "Visual quality analysis included".
+    (
+        video_quality_executed,
+        frames_sampled,
+        episodes_sampled,
+        video_absent,
+    ) = _resolve_video_quality(result)
 
+    total_episodes = len(getattr(result, "episodes", None) or {})
     video_quality_section = {}
     if execution_tier is not None:
         if video_quality_executed:
-            note = "Visual quality analysis included"
+            # Always state coverage: "100 frames sampled" over 1,200 episodes
+            # is technically true and practically misleading.
+            note = (
+                f"Visual quality analysis included "
+                f"({episodes_sampled}/{total_episodes} episodes, "
+                f"{frames_sampled} frames sampled)"
+            )
+        elif video_absent:
+            note = (
+                "Visual quality NOT measured: the declared video payload is "
+                "absent from this local copy. Re-run with the video files "
+                "present, or treat the video layer as unchecked."
+            )
         elif execution_tier == "no_video":
             note = "All video metrics skipped. Use --video-quality or --full to enable."
         elif execution_tier == "video_only":
@@ -185,6 +218,8 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
         video_quality_section = {
             "execution_tier": execution_tier,
             "video_quality_executed": video_quality_executed,
+            "episodes_sampled": episodes_sampled,
+            "frames_sampled": frames_sampled,
             "video_quality_note": note,
         }
 
@@ -194,7 +229,10 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
         # 1.3 (v0.9.21): added top-level ``audit_effective``.
         # 1.4 (v0.9.22): ``task_description`` is now emitted redacted, with
         #     ``task_description_redacted`` marking that it was rewritten.
-        "report_schema_version": "1.4",
+        # 1.5 (v0.12.0, REQ-15): added top-level ``unverifiable_episodes`` and
+        #     per-episode ``unverifiable_reasons``; ``video_quality`` gained
+        #     ``frames_sampled``. Additive — older consumers ignore new keys.
+        "report_schema_version": "1.5",
         "tool_version": _rda_version,
         "dataset": {
             "path": result.dataset_info.path,
@@ -210,7 +248,14 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "pass_rate": compact.pass_rate,
             "exclude_episodes": compact.exclude_episodes,
             "review_episodes": compact.review_episodes,
+            # REQ-15: surfaced next to the other two so a consumer cannot read
+            # verdict_counts["PASS"] alone and conclude the dataset is clean.
+            "unverifiable_episodes": compact.unverifiable_episodes,
         },
+        # REQ-15: duplicated at the top level on purpose. The summary block is
+        # nested; a reviewer scanning the root of a 500 MB report should not
+        # have to know where to look for "what was not checked".
+        "unverifiable_episodes": compact.unverifiable_episodes,
         # P0-2 (v0.9.21): did the audit actually run? When every episode
         # resolved no action / observation / video features, the report is
         # full of PASS/N-A and means "not audited", not "clean". Surface it
@@ -241,6 +286,45 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
     }
 
     return report
+
+
+def _resolve_video_quality(result: DatasetAuditResult) -> Tuple[bool, int, int, bool]:
+    """Decide what the video layer actually produced (REQ-16).
+
+    ``result.video_quality_executed`` is copied straight from the execution-tier
+    constant, so it records *intent*, not outcome: running ``--full`` on a
+    dataset whose mp4s were never downloaded still set it to ``True``, and the
+    report then stated "Visual quality analysis included".
+
+    Counting frames alone is not enough either — on a 1,200-episode dataset
+    where only 10 episodes have a decodable camera, "100 frames sampled" is
+    true but reads as if the whole dataset was covered. The episode count is
+    returned alongside so the note can state the coverage.
+
+    Returns:
+        A tuple ``(executed, frames_sampled, episodes_sampled, absent)``.
+        ``executed`` is True when at least one episode produced a real
+        ``visual_quality`` assessment; ``absent`` is True when the video
+        payload was missing from the local copy — a different fact from
+        "skipped because of the tier".
+    """
+    executed = False
+    frames_sampled = 0
+    episodes_sampled = 0
+    absent = False
+    episodes = getattr(result, "episodes", None) or {}
+    for ep in episodes.values():
+        vq = getattr(ep, "metrics", {}).get("visual_quality")
+        if vq is None:
+            continue
+        if vq.verifiability == Verifiability.UNVERIFIABLE:
+            absent = True
+            continue
+        if vq.availability == MetricAvailability.AVAILABLE:
+            executed = True
+            episodes_sampled += 1
+            frames_sampled += int(vq.measurement.get("frames_sampled") or 0)
+    return executed, frames_sampled, episodes_sampled, absent
 
 
 def _audit_effective(result: DatasetAuditResult) -> bool:
@@ -396,10 +480,20 @@ def _verifiability_for_metric(metric_name: str, m_result) -> str:
     - Not verifiable: data needed for the check is unavailable
     - N/A: check does not apply to the current data
     """
+    # REQ-15: the metric now states its own verifiability explicitly. Trust it
+    # over the old string-sniffing heuristic — under that heuristic every
+    # unrecognised NOT_AVAILABLE landed in "Not verifiable", which produced the
+    # right words in the report while the verdict engine still treated the
+    # episode as a clean PASS.
+    declared = getattr(m_result, "verifiability", None)
+    if declared == Verifiability.UNVERIFIABLE:
+        return "Not verifiable"
+    if declared == Verifiability.NOT_APPLICABLE:
+        return "N/A"
     if m_result.availability == MetricAvailability.NOT_AVAILABLE:
-        # N/A and "not verifiable" both surface as unavailable; the
-        # reason string distinguishes a modality that is absent (N/A)
-        # from a check that could not be evaluated (Not verifiable).
+        # Fallback for callers that predate the field: N/A and "not verifiable"
+        # both surface as unavailable; the reason string distinguishes a
+        # modality that is absent (N/A) from a check that could not be evaluated.
         reason = (m_result.assessment.get("reason") or "") if m_result.assessment else ""
         if reason in ("no_video_features", "single_camera") or reason.startswith("dep_"):
             return "N/A"

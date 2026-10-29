@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.12.0 - 未发布（开发完成，待发版）
+
+> 版本号尚未 bump（`pyproject.toml` / `__init__.py` 仍为 0.11.0）。本条记录的是已落地的代码改动，发版时连同版本号一并处理。
+
+### Added
+- **判定层第四态 `UNVERIFIABLE`（REQ-15）**：此前 `MetricAvailability` 只有 `available` / `not_available` / `error` 三态，把「检查项不适用」与「检查项适用但输入缺失」混为一谈；`classify_episode()` 对任何非 `AVAILABLE` 的指标一律豁免 verdict。结果是**同一根因的两个相反错误**：
+  - 声明了视频特征但本地 0 个 mp4（`aloha_insertion`）→ 4 个视频指标全部豁免 → **50/50 PASS，exit 0**；
+  - 声明 3 路相机但本地只下 1 路（`lerobot_folding`）→ `video_stream_presence` 仍能执行 → **1200/1200 EXCLUDE，exit 2**。
+
+  现在 `MetricResult` 增加 `verifiability` 字段（`VERIFIABLE` / `UNVERIFIABLE` / `NOT_APPLICABLE`，默认 `VERIFIABLE`，**additive，不改 `MetricAvailability`，59 处 `make_na()` 调用行为不变**），并新增 `make_unverifiable()` 构造器。`AuditVerdict` 增加 `UNVERIFIABLE`，优先级 **EXCLUDE > UNVERIFIABLE > REVIEW > PASS**——数据确实损坏比"没能检查"更紧急，但"没能检查"绝不等同于"干净"。
+
+  **核心边界**：区分点是文件**是否存在**，不是能否打开。缺文件 → `UNVERIFIABLE`（离线无法区分"上游也没有"与"我没下载"）；文件存在但损坏 → 仍 `EXCLUDE`（手里这份确实是坏的）。
+
+- **CLI exit 4 + `--continue-on-unverifiable`**：`4` = 存在无法判定的关键项，语义区别于 `2`（数据坏）与 `3`（压根没审）。override 时不改写任何 verdict，只在报告顶层写 `verifiability_override: true` 留痕。
+
+- **报告契约 1.5**：顶层与 summary 新增 `unverifiable_episodes`；单集新增 `unverifiable_reasons`（格式对齐 `exclude_reasons`）；`video_quality` 块新增 `episodes_sampled` / `frames_sampled`。
+
+- **`visual_quality` 的缺失分支**（方案外补充）：文件不存在时原先是静默 `continue` 后报 "skipped"，与"没跑"无法区分；改为 `make_unverifiable("videos_absent")` 并点名缺失的特征。
+
+### Fixed
+- **`video_quality_note` 与实际执行不符（REQ-16）**：`video_quality_executed` 直接取自 execution-tier 常量（`full` → `true`），记录的是**意图**而非结果，于是零视频数据集也输出 `"Visual quality analysis included"`。改为由 `_resolve_video_quality()` 逐集读指标结果推断，且 note 恒带覆盖比：`"…(10/1200 episodes, 100 frames sampled)"`——只报帧数在"1,200 集里只有 10 集可解码"时技术上为真、读起来像全覆盖。无帧时明写 `NOT measured` 与原因。
+- **`video_frame_integrity` / `video_stream_presence` 的出口拆分**：两者原先把 missing 与 unreadable 塞进同一个列表、共用同一个出口，是本次两个方向性误判的直接来源，现按 `missing` / `unreadable` 分表并分叉出口。
+
+### Tests
+- 新增 `tests/test_req15_unverifiable.py`（17 项）：结果类型契约、四态优先级、reasons 提取、端到端数据集、CLI 退出码与 override 留痕。
+- golden 新增 `video_corrupt_camera_stream`：**文件存在但损坏仍判 EXCLUDE**，钉住边界，防止本次修复演变成过度降级。
+- 全量 **312 passed / 5 skipped / 0 failed**。
+
+### Known gaps
+- `conform` 子命令（0.10.0 引入，4,860 行）自 PyPI 包回填至本仓库；**其测试、CHANGELOG 0.10/0.11 条目与 docs 尚未同步**，联网恢复后需 `git pull` 校准。
 ## 0.11.0 - 2026-10-27
 
 新增**视频像素层**（6.2.5.2 a) 1) 运动模糊核长度 + 附录 A 动态性测量）。0.10.x 里这一层是一个三合一的 `NOT_APPLICABLE` 占位项，本版把它换成一条真判定和三条例行观测。

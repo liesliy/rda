@@ -471,7 +471,12 @@ class TestINV006ReportVersionTrace:
         #          `task_description_redacted` records that it was rewritten.
         #          Bumping this constant is a *reporting-contract* change:
         #          consumers keying off the version must notice.
-        assert report["report_schema_version"] == "1.4", (
+        # v0.12.0: 1.4 → 1.5 (REQ-15) — new top-level `unverifiable_episodes`
+        #          and per-episode `unverifiable_reasons`; `video_quality`
+        #          gained `frames_sampled`. Additive, but a consumer that keys
+        #          off this number to decide whether PASS means "clean" must
+        #          see it change: a PASS-only reading is no longer sufficient.
+        assert report["report_schema_version"] == "1.5", (
             f"INV-006: unexpected schema version {report['report_schema_version']}"
         )
 

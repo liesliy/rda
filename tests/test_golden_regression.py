@@ -40,7 +40,7 @@ from rda.audit.episode_audit import EpisodeAuditor  # noqa: E402
 from rda.audit.dataset_audit import DatasetAuditor  # noqa: E402
 from rda.audit.rules import AuditVerdict, CRITICAL_METRICS  # noqa: E402
 from rda.io.schema import DatasetInfo  # noqa: E402
-from rda.metrics.base import MetricAvailability  # noqa: E402
+from rda.metrics.base import MetricAvailability, Verifiability  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from golden.golden_set import all_scenarios  # noqa: E402
@@ -64,7 +64,16 @@ def catalog(tmp_path_factory):
 
 
 def _fired(result):
-    return {n for n, m in result.metrics.items() if getattr(m, "has_finding", False)}
+    """Metric names that produced a finding — or that could not be judged.
+
+    REQ-15: an UNVERIFIABLE metric still counts as "this check fired". It ran
+    and reported back; it simply could not reach a conclusion.
+    """
+    return {
+        n for n, m in result.metrics.items()
+        if getattr(m, "has_finding", False)
+        or getattr(m, "verifiability", None) == Verifiability.UNVERIFIABLE
+    }
 
 
 # --- 1. Verdict matrix ------------------------------------------------------
@@ -140,7 +149,10 @@ def test_exclude_scenarios_driven_by_hard_critical(catalog):
     _, results = catalog
     for sid in ("nan_inf_values", "missing_frames_dropout",
                 "joint_limit_violation",
-                "video_missing_camera_stream", "video_long_freeze",
+                # REQ-15: ``video_missing_camera_stream`` moved out — an absent
+                # file is now UNVERIFIABLE, not EXCLUDE. The corrupt-file
+                # scenario replaces it so the boundary stays pinned.
+                "video_corrupt_camera_stream", "video_long_freeze",
                 "video_timestamp_drift"):
         if sid not in results:
             continue
@@ -256,7 +268,14 @@ def test_verdict_distribution_is_stable(catalog):
     """Pin the non-video verdict distribution so any accidental change to
     verdict logic fails loudly."""
     scenarios, results = catalog
-    dist = {AuditVerdict.PASS: 0, AuditVerdict.REVIEW: 0, AuditVerdict.EXCLUDE: 0}
+    dist = {
+        AuditVerdict.PASS: 0,
+        AuditVerdict.REVIEW: 0,
+        AuditVerdict.EXCLUDE: 0,
+        # REQ-15: pinned explicitly so an accidental collapse back into PASS
+        # (the original defect) fails loudly instead of rebalancing silently.
+        AuditVerdict.UNVERIFIABLE: 0,
+    }
     for s in scenarios:
         dist[results[s.id].verdict] += 1
     if not _HAS_AV:
@@ -264,11 +283,14 @@ def test_verdict_distribution_is_stable(catalog):
         # joint_limit_approaching + frozen_arm (v0.9.17) = 2 REVIEW;
         # nan + missing + joint_limit_violation = 3 EXCLUDE.
         assert dist == {AuditVerdict.PASS: 3, AuditVerdict.REVIEW: 2,
-                        AuditVerdict.EXCLUDE: 3}, dist
+                        AuditVerdict.EXCLUDE: 3,
+                        AuditVerdict.UNVERIFIABLE: 0}, dist
     else:
-        # +4 video scenarios: 1 pass, 3 exclude.
+        # +5 video scenarios: 1 pass, 3 hard exclude (freeze, drift, corrupt),
+        # and 1 unverifiable (camera file absent, REQ-15).
         assert dist == {AuditVerdict.PASS: 4, AuditVerdict.REVIEW: 2,
-                        AuditVerdict.EXCLUDE: 6}, dist
+                        AuditVerdict.EXCLUDE: 6,
+                        AuditVerdict.UNVERIFIABLE: 1}, dist
 
 
 def test_text_report_renders_without_video(catalog):

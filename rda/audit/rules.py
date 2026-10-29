@@ -34,15 +34,28 @@ from __future__ import annotations
 from enum import Enum
 from typing import Dict, List, Sequence
 
-from rda.metrics.base import MetricResult, MetricAvailability
+from rda.metrics.base import MetricResult, MetricAvailability, Verifiability
 
 
 class AuditVerdict(str, Enum):
-    """Three-tier audit classification."""
+    """Four-tier audit classification (REQ-15).
+
+    ``UNVERIFIABLE`` was added because a binary pass/fail cannot express the
+    most dangerous outcome in practice: *we did not look*. Previously a dataset
+    whose videos were never downloaded produced ``PASS`` with exit 0, and a
+    dataset missing two of three cameras produced ``EXCLUDE`` with exit 2 —
+    both wrong, in opposite directions, from the same root cause.
+
+    Priority when several signals fire: **EXCLUDE > UNVERIFIABLE > REVIEW >
+    PASS**. UNVERIFIABLE ranks below EXCLUDE on purpose: a dataset that is
+    demonstrably corrupt is worse than one whose corruption could not be
+    checked.
+    """
 
     PASS = "PASS"
     REVIEW = "REVIEW"
     EXCLUDE = "EXCLUDE"
+    UNVERIFIABLE = "UNVERIFIABLE"
 
     def __str__(self) -> str:  # noqa: D401
         return self.value
@@ -175,10 +188,22 @@ def classify_episode(
     """
     critical = set(critical_metrics) if critical_metrics is not None else set(CRITICAL_METRICS)
 
-    # Collect critical metrics that have findings
+    # Collect critical metrics that have findings, and those that could not
+    # be judged at all (REQ-15).
     failed_critical = set()
     review_only_metrics = set()
+    unverifiable_critical = set()
     for r in metric_results:
+        # REQ-15: verifiability is examined *before* availability. A metric whose
+        # input is missing locally must not fall through to the generic "N/A → exempt"
+        # branch — that exemption is precisely what turned "videos never downloaded"
+        # into a silent PASS.
+        if r.verifiability == Verifiability.NOT_APPLICABLE:
+            continue  # genuinely meaningless for this kind of data — exempt
+        if r.verifiability == Verifiability.UNVERIFIABLE:
+            if r.name in critical:
+                unverifiable_critical.add(r.name)
+            continue  # "not judged" — neither passed nor failed
         if r.availability != MetricAvailability.AVAILABLE:
             continue  # N/A / error metrics don't affect verdict
         if not r.has_finding:
@@ -192,15 +217,23 @@ def classify_episode(
         if r.assessment.get("status") == "review":
             review_only_metrics.add(r.name)
 
-    if not failed_critical:
-        return AuditVerdict.PASS
+    # Priority: EXCLUDE > UNVERIFIABLE > REVIEW > PASS
+    if failed_critical:
+        # If ALL failed critical metrics are REVIEW-level (not hard EXCLUDE), return REVIEW
+        if failed_critical == review_only_metrics:
+            # Soft findings only — but if part of the data was never checked,
+            # the honest answer is "incomplete", not "review".
+            return AuditVerdict.UNVERIFIABLE if unverifiable_critical else AuditVerdict.REVIEW
 
-    # If ALL failed critical metrics are REVIEW-level (not hard EXCLUDE), return REVIEW
-    if failed_critical == review_only_metrics:
-        return AuditVerdict.REVIEW
+        # Otherwise, at least one metric has a hard EXCLUDE finding
+        return AuditVerdict.EXCLUDE
 
-    # Otherwise, at least one metric has a hard EXCLUDE finding
-    return AuditVerdict.EXCLUDE
+    if unverifiable_critical:
+        # Nothing was found wrong, but something could not be checked.
+        # Explicitly NOT a pass.
+        return AuditVerdict.UNVERIFIABLE
+
+    return AuditVerdict.PASS
 
 
 def get_exclude_reasons(
@@ -237,6 +270,39 @@ def get_exclude_reasons(
         if r.assessment.get("status") == "review":
             continue
         # This metric caused an EXCLUDE — build a readable reason
+        reason_text = r.assessment.get("reason", "") or r.message or r.name
+        reasons.append(f"{r.name} (L1): {reason_text}")
+    return reasons
+
+
+def get_unverifiable_reasons(
+    metric_results: Sequence[MetricResult],
+    critical_metrics: Sequence[str] | None = None,
+) -> List[str]:
+    """Return human-readable reasons for UNVERIFIABLE verdicts (REQ-15).
+
+    Lists the critical metrics that could not be judged because required input
+    was absent locally, in the same ``"<name> (L1): <reason>"`` shape as
+    :func:`get_exclude_reasons` so report and UI code can share the rendering.
+
+    Only meaningful when the overall verdict is UNVERIFIABLE. Returns an empty
+    list otherwise.
+
+    Args:
+        metric_results: List of MetricResult from all computed metrics.
+        critical_metrics: Metric names considered critical. Defaults to
+            :data:`CRITICAL_METRICS`.
+
+    Returns:
+        List of reason strings for each unverifiable critical metric.
+    """
+    critical = set(critical_metrics) if critical_metrics is not None else set(CRITICAL_METRICS)
+    reasons: List[str] = []
+    for r in metric_results:
+        if r.verifiability != Verifiability.UNVERIFIABLE:
+            continue
+        if r.name not in critical:
+            continue
         reason_text = r.assessment.get("reason", "") or r.message or r.name
         reasons.append(f"{r.name} (L1): {reason_text}")
     return reasons

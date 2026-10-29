@@ -155,13 +155,19 @@ class VideoFrameIntegrityMetric(MetricBase):
         checked: List[Dict[str, Any]] = []
         mismatched: List[Dict[str, Any]] = []
         unreadable: List[str] = []
+        # REQ-15: "the file is absent" and "the file is broken" are different
+        # facts and must not share an outcome. Absent means we cannot know
+        # whether upstream has it (we are offline), so the honest answer is
+        # "unverifiable". Broken means the file we do have is unusable, which
+        # stays a hard EXCLUDE.
+        missing: List[str] = []
 
         for feature, info in sorted(video_features.items()):
             chunk = info.get("chunk_index")
             file_idx = info.get("file_index")
             ep_index = info.get("episode_index")
             if chunk is None or file_idx is None:
-                unreadable.append(feature)
+                missing.append(feature)
                 continue
 
             # Try v3.0 format first: videos/<feature>/chunk-XXX/file-XXX.mp4
@@ -182,7 +188,7 @@ class VideoFrameIntegrityMetric(MetricBase):
                     / f"episode_{int(ep_index):06d}.mp4"
                 )
             if not video_path.exists():
-                unreadable.append(feature)
+                missing.append(feature)
                 continue
 
             try:
@@ -255,22 +261,44 @@ class VideoFrameIntegrityMetric(MetricBase):
                 entry["level"] = "soft"
                 mismatched.append(entry)
 
-        if not checked and not unreadable:
+        if not checked and not unreadable and not missing:
             return MetricResult.make_na(
                 name=self.name,
                 reason="no_video_files_resolved",
                 message="No video files could be resolved for this episode.",
             )
 
-        if unreadable and not checked:
-            return MetricResult.make_na(
+        # Nothing at all could be decoded — now decide *why* before choosing
+        # an outcome (REQ-15).
+        if not checked:
+            if missing and not unreadable:
+                # Every declared video file is absent from the local copy.
+                # Offline we cannot distinguish "upstream lacks it" from
+                # "I never downloaded it", so this is neither a pass nor a fail.
+                return MetricResult.make_unverifiable(
+                    name=self.name,
+                    reason="video_files_absent",
+                    message=(
+                        f"Declared video file(s) absent from the local copy: "
+                        f"{', '.join(missing)}. The video layer could not be "
+                        f"judged - a local-completeness gap, not evidence that "
+                        f"the data is clean or broken."
+                    ),
+                    details={"missing_features": missing},
+                )
+            # At least one file exists but cannot be parsed: the copy we have
+            # is genuinely broken, so keep the hard failure.
+            return MetricResult.make_exclude(
                 name=self.name,
                 reason="video_files_unreadable",
                 message=(
-                    f"Video files missing or unreadable for: "
+                    f"Video files present but unreadable for: "
                     f"{', '.join(unreadable)}."
                 ),
-                details={"unreadable_features": unreadable},
+                details={
+                    "unreadable_features": unreadable,
+                    "missing_features": missing,
+                },
             )
 
         details: Dict[str, Any] = {

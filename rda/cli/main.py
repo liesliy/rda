@@ -171,6 +171,19 @@ def cli(ctx: click.Context) -> None:
     ),
 )
 @click.option(
+    "--continue-on-unverifiable",
+    "continue_on_unverifiable",
+    is_flag=True,
+    default=False,
+    help=(
+        "Exit 0 even when episodes could not be judged because required "
+        "input is absent from the local copy. The report still carries those "
+        "verdicts and additionally sets verifiability_override=true, so a "
+        "downstream consumer can tell a forced-through run from a clean one. "
+        "Only use it when a partial local copy is expected."
+    ),
+)
+@click.option(
     "--freeze-motion-source",
     "freeze_motion_source",
     type=click.Choice(["action", "state", "auto"], case_sensitive=False),
@@ -198,11 +211,12 @@ def audit(
     freeze_motion_source: str,
     pii_video: bool,
     pii_strict: bool,
+    continue_on_unverifiable: bool,
 ) -> None:
     """Audit a LeRobot dataset at the given PATH.
 
     Runs all RDA metrics against every episode in the dataset and produces
-    a verdict (PASS / REVIEW / EXCLUDE) for each episode.
+    a verdict (PASS / REVIEW / UNVERIFIABLE / EXCLUDE) for each episode.
 
     \b
     Execution Tiers (D-17):
@@ -235,12 +249,17 @@ def audit(
 
     \b
     Exit codes:
-      0  Audited, no EXCLUDE verdicts
+      0  Audited, no EXCLUDE and no UNVERIFIABLE verdicts
       1  Usage / structural error (bad path, unreadable dataset)
       2  At least one EXCLUDE verdict
       3  No effective audit — no episode yielded auditable content
          (no action / observation / video features resolved, or 0 episodes).
          A report with exit 3 must not be read as "data is clean".
+      4  At least one episode was UNVERIFIABLE — a critical check applies to
+         this dataset but its input is missing from the local copy, so no
+         verdict could be reached. Distinct from 2 (data is bad) and from 3
+         (nothing was audited at all). Pass --continue-on-unverifiable to
+         downgrade this to a warning while still recording the verdicts.
     """
     from rda.audit.dataset_audit import DatasetAuditor
     from rda.audit.execution_tier import ExecutionTier, get_tier_config
@@ -390,6 +409,12 @@ def audit(
     if blind:
         report_dict = anonymize_report(report_dict)
 
+    # REQ-15: record an explicit override inside the report itself, and set it
+    # before serialisation so the saved file carries it too. "Forced through"
+    # and "genuinely clean" must not be indistinguishable downstream.
+    if continue_on_unverifiable and report_dict.get("unverifiable_episodes"):
+        report_dict["verifiability_override"] = True
+
     if output_format.lower() == "text":
         text = format_enhanced_summary_text(result)
         if blind:
@@ -462,6 +487,23 @@ def audit(
     # --- Exit with non-zero if any EXCLUDE verdicts -------------------------
     if summary.verdict_counts.get("EXCLUDE", 0) > 0:
         sys.exit(2)
+
+    # --- REQ-15: "could not judge" must not exit like "clean" --------------
+    # Ordered after EXCLUDE on purpose: data that is demonstrably corrupt is a
+    # more urgent finding than data we simply could not check.
+    unverifiable_count = summary.verdict_counts.get("UNVERIFIABLE", 0)
+    if unverifiable_count > 0 and not continue_on_unverifiable:
+        click.echo(
+            f"ERROR: {unverifiable_count} episode(s) could not be judged — "
+            f"required input is absent from this local copy.\n"
+            f"  What was missing is listed per episode under "
+            f"'unverifiable_reasons'.\n"
+            f"  This report must NOT be read as 'data is clean'.\n"
+            f"  Fetch the missing payload and re-run, or pass "
+            f"--continue-on-unverifiable to accept a partial audit.",
+            err=True,
+        )
+        sys.exit(4)
 
 
 # ---------------------------------------------------------------------------

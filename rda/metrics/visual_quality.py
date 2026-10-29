@@ -138,6 +138,10 @@ class VisualQualityMetric(MetricBase):
         timestamps = _sample_timestamps(episode, n_samples)
 
         per_feature: Dict[str, Dict[str, Any]] = {}
+        # REQ-16: previously an absent file hit a bare ``continue`` and was
+        # simply never mentioned, so the report could claim "visual quality
+        # analysis included" over a dataset with no videos at all.
+        absent_features: List[str] = []
         for feature, info in sorted(video_features.items()):
             chunk = info.get("chunk_index")
             file_idx = info.get("file_index")
@@ -159,6 +163,7 @@ class VisualQualityMetric(MetricBase):
                         / f"episode_{int(ep_index):06d}.mp4"
                     )
             if not video_path.exists():
+                absent_features.append(feature)
                 continue
 
             span = float(to_ts) - float(from_ts)
@@ -193,6 +198,20 @@ class VisualQualityMetric(MetricBase):
                 per_feature[feature] = _aggregate_samples(samples)
 
         if not per_feature:
+            if absent_features:
+                # Nothing was sampled because the files are not here. Saying
+                # "skipped" hides the reason; say "absent" so the report can
+                # tell "not judged" apart from "judged and clean".
+                return MetricResult.make_unverifiable(
+                    name=self.name,
+                    reason="videos_absent",
+                    message=(
+                        f"Declared video file(s) absent from the local copy: "
+                        f"{', '.join(absent_features)}. Visual quality was NOT "
+                        f"measured."
+                    ),
+                    details={"absent_features": absent_features},
+                )
             return MetricResult.make_na(
                 name=self.name,
                 reason="videos_not_decodable",
@@ -223,6 +242,10 @@ class VisualQualityMetric(MetricBase):
                 per_feature.items(), key=lambda kv: kv[1]["penalty"]
             )[0],
             "worst_frame_t": worst.get("worst_frame_t"),
+            # REQ-16: how many frames this episode actually contributed to the
+            # visual assessment, so the dataset-level report can state a number
+            # instead of asserting "analysis included" without evidence.
+            "frames_sampled": n_samples * len(per_feature),
         }
 
         if penalty >= _PENALTY_REVIEW:
