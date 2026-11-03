@@ -67,12 +67,48 @@ def _write_video(
             c.mux(packet)
 
 
+def _write_low_motion_video(
+    path: Path, n_frames: int = 32, size: int = 64, fps: int = 10,
+    patch: int = 3, delta: int = 20,
+) -> None:
+    """Write a fixed-camera clip where only a small patch moves.
+
+    Models the statistics of an overhead view in which the arm occupies a few
+    percent of the frame: the mean frame-to-frame difference is ~0.015 gray
+    levels. The old absolute epsilon (0.10) put *every* frame below the
+    threshold, i.e. it reported a permanent camera stall on a perfectly healthy
+    video. Drop-out means the same frame re-sent, not a frame that changed
+    little.
+    """
+    import numpy as np
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    base = ((np.indices((size, size)).sum(axis=0) % 7) * 3 + 90).astype(np.uint8)
+    with av.open(str(path), mode="w") as c:
+        stream = c.add_stream("libx264", rate=fps)
+        stream.width, stream.height = size, size
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"crf": "0"}
+        stream.gop_size = n_frames
+        for i in range(n_frames):
+            frame = base.copy()
+            x = 10 + (i % (size - patch - 10))
+            frame[30:30 + patch, x:x + patch] = np.uint8(90 + delta)
+            for packet in stream.encode(
+                av.VideoFrame.from_ndarray(frame, format="gray")
+            ):
+                c.mux(packet)
+        for packet in stream.encode():
+            c.mux(packet)
+
+
 def _make_episode(
     tmp_path: Path,
     cameras: Dict[str, Optional[tuple[int, int]]] = None,
     num_frames: int = 64,
     fps: int = 10,
     span_ratio: float = 1.0,
+    low_motion: bool = False,
 ) -> EpisodeData:
     """Build an episode whose video_features point at synthetic files.
 
@@ -84,10 +120,11 @@ def _make_episode(
     root = tmp_path / "ds"
     video_features: Dict[str, Any] = {}
     for cam, freeze in cameras.items():
-        _write_video(
-            root / "videos" / cam / "chunk-000" / "file-000.mp4",
-            n_frames=32, freeze=freeze, fps=fps,
-        )
+        target = root / "videos" / cam / "chunk-000" / "file-000.mp4"
+        if low_motion:
+            _write_low_motion_video(target, n_frames=32, fps=fps)
+        else:
+            _write_video(target, n_frames=32, freeze=freeze, fps=fps)
         video_features[cam] = {
             "chunk_index": 0,
             "file_index": 0,
@@ -190,6 +227,43 @@ class TestVideoFreeze:
         assert "state_motion_median" not in details
         assert "state_motion_mad" not in details
         assert "state_motion_threshold" not in details
+
+    def test_low_motion_fixed_camera_is_not_a_stall(self, tmp_path):
+        """D-27 regression: a quiet view is not a dropped-out camera.
+
+        A fixed overhead camera carries only a small moving region, so its
+        median frame difference is ~0.015 gray levels. The previous absolute
+        threshold (max(0.10, 0.25·p10)) sat above that value, so every frame
+        was classified as frozen and a healthy episode was excluded. On the
+        FineART audit that produced 36 flagged regions across 6 episodes and 5
+        false EXCLUDEs; re-measurement at full resolution showed the frames
+        were moving (region mean diff 0.10-0.15 vs episode median 0.29-0.87)
+        and that *no* frame pair was identical.
+        """
+        ep = _make_episode(tmp_path, cameras={"cam": None}, low_motion=True)
+        r = VideoFreezeMetric().compute(ep)
+        assert r.availability == MetricAvailability.AVAILABLE
+        assert r.assessment["status"] == "pass", r.assessment
+        assert r.details["freeze_region_count"] == 0
+
+    def test_duplicate_threshold_tracks_stream_motion(self, tmp_path):
+        """D-27: the duplicate threshold stays below the stream's own motion."""
+        ep = _make_episode(tmp_path, cameras={"cam": None}, low_motion=True)
+        r = VideoFreezeMetric().compute(ep)
+        prof = r.details["stream_motion_profile"]["cam"]
+        assert prof["duplicate_ratio"] == 0.0
+        assert prof["duplicate_eps"] < prof["median_diff"]
+        # Never reach into normal motion: capped at half the 25th percentile.
+        assert prof["duplicate_eps"] <= 0.05
+
+    def test_true_duplicate_frames_still_excluded(self, tmp_path):
+        """D-27: the sharpened criterion must keep detecting real drop-outs."""
+        ep = _make_episode(tmp_path, cameras={"cam": (5, 25)})
+        r = VideoFreezeMetric().compute(ep)
+        assert r.assessment["status"] == "exclude"
+        region = r.details["freeze_regions"][0]
+        # Identical frames: the measured difference inside the span is ~0.
+        assert region["mean_diff_in_span"] <= region["duplicate_eps"]
 
 
 # ---------------------------------------------------------------------------

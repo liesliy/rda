@@ -54,15 +54,34 @@ _FREEZE_CONCLUSIVE_RUNS = 3     # this many sustained spans → EXCLUDE
 _FREEZE_CONCLUSIVE_SECONDS = 3.0  # or one span longer than this
 _FREEZE_MAX_TOTAL_RATIO = 0.30  # or frozen ≥30% of the episode
 _MAX_FREEZE_REPORT = 8          # cap freeze regions in details (report size)
+
+# Duplicate-frame threshold (D-27). A camera that drops out re-sends the same
+# frame, so the decoded frame-to-frame difference is *zero*, not merely small.
+# The old threshold (max(0.10, 0.25·p10)) was an absolute one and sat inside the
+# normal distribution of low-motion views: on a fixed overhead camera whose
+# median frame difference is ~0.15 gray levels it flagged ~38% of frames as
+# frozen. Camera drop-out and slow motion differ in kind (zero vs non-zero), not
+# in degree, so the threshold is now a duplicate floor that is bounded from
+# above by the stream's own low quantile.
+_FREEZE_DUP_FLOOR = 0.002       # gray levels; absorbs codec/decode jitter only
+_FREEZE_DUP_CEILING = 0.01      # never let the threshold reach normal motion
+_FREEZE_DUP_P10_FACTOR = 0.25   # threshold tracks 25% of the 10th percentile
+_FREEZE_DUP_P25_CAP = 0.5       # …but never above half the 25th percentile
+
 _TS_SOFT_TOLERANCE = 0.05       # 5% span mismatch → review (aligned with spec §4.7 default profile)
 _TS_HARD_TOLERANCE = 0.10       # 10% span mismatch → exclude (legacy; span_consistency is diagnostic by default)
 _DRIFT_WINDOW_SEC = 5.0         # window size for temporal drift computation
 
 # --- Profile presets (§4.6 / §4.7 / §4.12) ---
+# NOTE (D-27): profiles tune the *grading* scale (how many spans, how long, what
+# share of the episode), not the duplicate-frame criterion itself. Whether two
+# decoded frames are identical is a physical fact about the file, so
+# ``duplicate_eps`` stays the same across profiles; making it profile-dependent
+# would let "strict" re-introduce the false positives this revision removes.
 _FREEZE_PROFILES: Dict[str, Dict[str, Any]] = {
-    "strict":   {"min_freeze_duration_sec": 0.3, "min_freeze_segments": 2, "max_single_freeze_sec": 1.5, "max_freeze_ratio": 0.15, "motion_ratio_threshold": 0.3, "motion_threshold_pct": 0.03},
-    "default":  {"min_freeze_duration_sec": 0.5, "min_freeze_segments": 3, "max_single_freeze_sec": 3.0, "max_freeze_ratio": 0.30, "motion_ratio_threshold": 0.5, "motion_threshold_pct": 0.05},
-    "lenient":  {"min_freeze_duration_sec": 1.0, "min_freeze_segments": 5, "max_single_freeze_sec": 5.0, "max_freeze_ratio": 0.50, "motion_ratio_threshold": 0.7, "motion_threshold_pct": 0.10},
+    "strict":   {"min_freeze_duration_sec": 0.3, "min_freeze_segments": 2, "max_single_freeze_sec": 1.5, "max_freeze_ratio": 0.15, "motion_ratio_threshold": 0.3, "motion_threshold_pct": 0.03, "duplicate_eps": _FREEZE_DUP_FLOOR},
+    "default":  {"min_freeze_duration_sec": 0.5, "min_freeze_segments": 3, "max_single_freeze_sec": 3.0, "max_freeze_ratio": 0.30, "motion_ratio_threshold": 0.5, "motion_threshold_pct": 0.05, "duplicate_eps": _FREEZE_DUP_FLOOR},
+    "lenient":  {"min_freeze_duration_sec": 1.0, "min_freeze_segments": 5, "max_single_freeze_sec": 5.0, "max_freeze_ratio": 0.50, "motion_ratio_threshold": 0.7, "motion_threshold_pct": 0.10, "duplicate_eps": _FREEZE_DUP_FLOOR},
 }
 
 _TS_ALIGNMENT_PROFILES: Dict[str, Dict[str, float]] = {
@@ -185,18 +204,49 @@ def _get_frame_timestamps(
         return None
 
 
-def _freeze_runs(
-    frames: np.ndarray,
-    min_run_frames: int,
-) -> List[Tuple[int, int]]:
-    """Find runs of consecutive near-identical (camera-stalled) frames."""
+def _motion_stats(
+    frames: np.ndarray, dup_floor: float = _FREEZE_DUP_FLOOR
+) -> Optional[Dict[str, Any]]:
+    """Frame-to-frame motion statistics for one decoded span.
+
+    Returns the mean absolute difference between consecutive 64×64 gray
+    frames plus the quantiles the duplicate threshold is derived from, or
+    ``None`` when the span has fewer than two frames.
+
+    The returned ``duplicate_eps`` is the value below which a frame pair is
+    treated as "the camera re-sent the previous frame". It is bounded twice:
+    below by :data:`_FREEZE_DUP_FLOOR` (codec jitter) and above by the
+    stream's own 25th percentile, so a slow-moving or low-contrast view can
+    never have its normal motion classified as a duplicate.
+    """
     if frames.shape[0] < 2:
-        return []
+        return None
     flat = frames.reshape(frames.shape[0], -1).astype(np.float32)
     diffs = np.abs(np.diff(flat, axis=0)).mean(axis=1)
-    noise_floor = float(np.percentile(diffs, 10))
-    eps = max(0.10, 0.25 * noise_floor)
-    frozen = diffs < eps
+    if diffs.size == 0:
+        return None
+    p10 = float(np.percentile(diffs, 10))
+    p25 = float(np.percentile(diffs, 25))
+    p50 = float(np.percentile(diffs, 50))
+    p90 = float(np.percentile(diffs, 90))
+    # Floor first, cap second: the cap must never push the threshold below the
+    # codec-jitter floor, or a near-freeze stream would lose its tolerance.
+    upper = max(float(dup_floor), min(_FREEZE_DUP_P25_CAP * p25, _FREEZE_DUP_CEILING))
+    eps = min(max(float(dup_floor), _FREEZE_DUP_P10_FACTOR * p10), upper)
+    return {
+        "diffs": diffs,
+        "p10": p10,
+        "p25": p25,
+        "p50": p50,
+        "p90": p90,
+        "duplicate_eps": float(eps),
+        "duplicate_ratio": float((diffs <= eps).mean()),
+        "median_diff": p50,
+    }
+
+
+def _runs_from_mask(frozen: np.ndarray, min_run_frames: int) -> List[Tuple[int, int]]:
+    """Extract runs of consecutive ``True`` values at least *min_run_frames* long."""
     runs: List[Tuple[int, int]] = []
     start = None
     for i, f in enumerate(frozen):
@@ -209,6 +259,33 @@ def _freeze_runs(
     if start is not None and (len(frozen) - start) >= min_run_frames:
         runs.append((start, len(frozen) - 1))
     return runs
+
+
+def _freeze_runs(
+    frames: np.ndarray,
+    min_run_frames: int,
+    duplicate_eps: Optional[float] = None,
+    dup_floor: float = _FREEZE_DUP_FLOOR,
+) -> List[Tuple[int, int]]:
+    """Find runs of consecutive duplicate (camera-stalled) frames.
+
+    A stalled camera re-sends the previous frame, so consecutive decoded
+    frames are identical up to codec noise. That is a much sharper signature
+    than "the difference is small": slow motion and low-contrast fixed views
+    also produce small differences but never produce *zero* change.
+
+    Args:
+        frames: ``(N, H, W)`` decoded grayscale frames.
+        min_run_frames: minimum run length to report.
+        duplicate_eps: explicit threshold; when ``None`` it is derived from
+            the span's own motion distribution (see :func:`_motion_stats`).
+        dup_floor: lower bound used when deriving the threshold.
+    """
+    stats = _motion_stats(frames, dup_floor=dup_floor)
+    if stats is None:
+        return []
+    eps = stats["duplicate_eps"] if duplicate_eps is None else float(duplicate_eps)
+    return _runs_from_mask(stats["diffs"] <= eps, min_run_frames)
 
 
 def _moving_mask(
@@ -938,9 +1015,17 @@ class VideoFreezeMetric(MetricBase):
                     "auto_fallback_to_action" if self.motion_source == "auto" else "action"
                 )
 
-        min_run_video = max(int(round(_FREEZE_MIN_SECONDS * float(fps))), 2)
+        # D-27: honour the profile's minimum span instead of only the module
+        # constant — previously strict/lenient advertised 0.3/1.0 s but both ran
+        # at 0.5 s, i.e. the preset was decorative.
+        min_freeze_sec = float(
+            self._profile_cfg.get("min_freeze_duration_sec", _FREEZE_MIN_SECONDS)
+        )
+        min_run_video = max(int(round(min_freeze_sec * float(fps))), 2)
+        dup_floor = float(self._profile_cfg.get("duplicate_eps", _FREEZE_DUP_FLOOR))
         checked = 0
         freeze_regions: List[Dict[str, Any]] = []
+        stream_motion: Dict[str, Any] = {}
 
         for feature, info in sorted(video_features.items()):
             chunk = info.get("chunk_index")
@@ -972,15 +1057,34 @@ class VideoFreezeMetric(MetricBase):
                 continue
             checked += 1
 
+            stats = _motion_stats(frames, dup_floor=dup_floor)
+            if stats is None:
+                continue
+            # Diagnostic: how much motion this view carries at all. A fixed
+            # overhead camera legitimately sits an order of magnitude below a
+            # wrist camera; publishing the number keeps "quiet view" from
+            # being read as "broken view".
+            stream_motion[feature] = {
+                "frames": int(frames.shape[0]),
+                "median_diff": round(stats["p50"], 4),
+                "p90_diff": round(stats["p90"], 4),
+                "duplicate_eps": round(stats["duplicate_eps"], 4),
+                "duplicate_ratio": round(stats["duplicate_ratio"], 4),
+            }
+
             n_video, n_parquet = frames.shape[0], episode.num_frames
             scale = n_parquet / max(n_video, 1)
 
-            for v_start, v_end in _freeze_runs(frames, min_run_video):
+            runs = _runs_from_mask(
+                stats["diffs"] <= stats["duplicate_eps"], min_run_video
+            )
+            for v_start, v_end in runs:
                 p_start = int(v_start * scale)
                 p_end = min(int(v_end * scale) + 1, n_parquet - 1)
                 span = moving[p_start:p_end + 1]
                 moving_ratio = float(span.mean()) if span.size else 0.0
                 if moving_ratio > 0.5:
+                    seg_diffs = stats["diffs"][v_start:v_end + 1]
                     freeze_regions.append({
                         "feature": feature,
                         "video_start": int(from_ts * fps) + v_start,
@@ -989,6 +1093,8 @@ class VideoFreezeMetric(MetricBase):
                         "parquet_end": p_end,
                         "duration_sec": round((v_end - v_start + 1) / float(fps), 3),
                         "moving_ratio_in_span": round(moving_ratio, 3),
+                        "mean_diff_in_span": round(float(seg_diffs.mean()), 5),
+                        "duplicate_eps": round(stats["duplicate_eps"], 5),
                     })
 
         if checked == 0:
@@ -1034,7 +1140,7 @@ class VideoFreezeMetric(MetricBase):
                     region["state_cross_validated"] = False
 
         freeze_regions.sort(key=lambda r: -(r["moving_ratio_in_span"]))
-        hard = [r for r in freeze_regions if r["duration_sec"] >= _FREEZE_MIN_SECONDS][
+        hard = [r for r in freeze_regions if r["duration_sec"] >= min_freeze_sec][
             :_MAX_FREEZE_REPORT
         ]
         details: Dict[str, Any] = {
@@ -1043,6 +1149,7 @@ class VideoFreezeMetric(MetricBase):
             "freeze_region_count": len(freeze_regions),
             "freeze_motion_source": effective_motion_source,
             "state_cross_validated_segments": state_cross_validated_segments,
+            "stream_motion_profile": stream_motion,
         }
         # D-25: surface threshold values when state cross-validation is active
         if state_median is not None and state_mad is not None and state_threshold is not None:
@@ -1051,8 +1158,16 @@ class VideoFreezeMetric(MetricBase):
             details["state_motion_threshold"] = round(state_threshold, 6)
         details["params"] = {
             "decode": f"{_FREEZE_GRAY_SIZE}x{_FREEZE_GRAY_SIZE} gray",
-            "min_freeze_seconds": _FREEZE_MIN_SECONDS,
-            "epsilon": "adaptive: max(0.10, 0.25 x p10 of frame diffs)",
+            "min_freeze_seconds": min_freeze_sec,
+            "criterion": "duplicate frames (camera re-sent the previous frame)",
+            # D-27: the threshold is a duplicate floor, bounded above by the
+            # stream's own p25 so slow motion is never read as a stall.
+            "epsilon": (
+                f"duplicate eps = min(max(floor, 0.25 x p10), "
+                f"max(floor, min(0.5 x p25, {_FREEZE_DUP_CEILING}))) "
+                f"on mean |frame[i+1] - frame[i]|"
+            ),
+            "profile_duplicate_floor": dup_floor,
         }
 
         if not freeze_regions:
@@ -1063,7 +1178,10 @@ class VideoFreezeMetric(MetricBase):
                     "checked_features": checked,
                     "freeze_region_count": 0,
                 },
-                message=f"No frozen-video-while-moving spans in {checked} camera stream(s).",
+                message=(
+                    f"No duplicated-frame spans in {checked} camera stream(s); "
+                    f"no camera re-sent a frame while the arm was moving."
+                ),
                 details=details,
             )
 
@@ -1108,26 +1226,29 @@ class VideoFreezeMetric(MetricBase):
                     },
                     reason="state_also_stationary",
                     message=(
-                        f"Video freeze detected ({len(freeze_regions)} region(s), "
-                        f"{total_frozen_sec:.1f}s total: {regions_desc}), but state "
-                        f"data was also stationary — likely whole-system idle, not "
-                        f"camera drop-out. Downgraded to REVIEW."
+                        f"Camera(s) repeated a frame {len(freeze_regions)} time(s), "
+                        f"{total_frozen_sec:.1f}s total: {regions_desc}; state data was also "
+                        f"stationary — likely whole-system idle, not camera drop-out. "
+                        f"Downgraded to REVIEW."
                     ),
                     details=details,
                     severity="low",
                 )
 
             regions_desc = ", ".join(
-                f"{r['feature']}@{r['duration_sec']}s(f{r['parquet_start']}-{r['parquet_end']})"
+                f"{r['feature']}@{r['duration_sec']}s(f{r['parquet_start']}-{r['parquet_end']}, "
+                f"diff {r.get('mean_diff_in_span', 0):.4f})"
                 for r in hard
             )
             return MetricResult.make_exclude(
                 name=self.name,
                 reason="video_freeze_while_moving",
                 message=(
-                    f"Camera stream(s) froze {len(freeze_regions)} time(s) for a total of "
-                    f"{total_frozen_sec:.1f}s while the arm was moving: {regions_desc}. "
-                    f"Visual modality is missing for these spans (camera drop-out signature)."
+                    f"Camera stream(s) re-sent the previous frame {len(freeze_regions)} time(s) "
+                    f"for a total of {total_frozen_sec:.1f}s while the arm was moving: "
+                    f"{regions_desc}. Consecutive frames are identical up to codec noise, so the "
+                    f"visual modality carries no new information for these spans (camera "
+                    f"drop-out signature)."
                 ),
                 details=details,
             )
@@ -1142,9 +1263,11 @@ class VideoFreezeMetric(MetricBase):
                 "total_frozen_sec": round(total_frozen_sec, 3),
             },
             message=(
-                f"Possible brief video freeze: {r0['feature']} frozen "
+                f"Possible brief video stall: {r0['feature']} repeated a frame for "
                 f"{r0['duration_sec']}s at parquet frames "
-                f"{r0['parquet_start']}-{r0['parquet_end']} while moving."
+                f"{r0['parquet_start']}-{r0['parquet_end']} while moving "
+                f"(diff {r0.get('mean_diff_in_span', 0):.4f} <= eps "
+                f"{r0.get('duplicate_eps', 0):.4f}). Too short to exclude on its own."
             ),
             details=details,
         )

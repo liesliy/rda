@@ -111,7 +111,7 @@ RDA 不追求"通用好"，而是定义"**可训练性**"——数据是否适�
 
 **其他阈值示例**：
 - gap_threshold = median_dt × 2.5（基于数据自适应，不拍脑袋）
-- video_freeze 阈值 = `max(0.10, 0.25 × p10(frame diffs))`（自适应）
+- video_freeze 阈值 = `min(max(profile_floor, 0.25 × p10), max(profile_floor, min(0.5 × p25, 0.01)))`，判据是**帧差 ≈ 0（重发帧）**，不是"帧差小"（D-27，0.12.2 起）
 
 ---
 

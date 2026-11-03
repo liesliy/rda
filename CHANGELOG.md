@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.12.2 - 2026-11-03
+
+### Fixed
+- **`video_freeze` 把正常慢动作判成相机卡死（D-27）**。原判据
+  `eps = max(0.10, 0.25 × p10)` 是**绝对灰度阈值**，只在 libero_10 那种
+  "正常帧差 1.0–3.0"的视角下成立。固定鸟瞰机位里机械臂只占画面几个百分点，
+  正常帧差本身只有 0.12–0.17，与 0.10 同量级，于是阈值切进分布中段。
+
+  在 FineART（Scale AI × HF LeRobot）子集上实测：`cam_high` 被判 frozen 的帧
+  占 **37.9%（中位）/ 43.2%（最大）**，6 集里 5 集被判 EXCLUDE。而同一批数据
+  中**帧差精确为 0 的帧对占比是 0.00%**——不存在任何真正的重发帧；全分辨率复测
+  也显示被标记区段画面在动（区段均值 0.10–0.15 vs 同集全片中位 0.29–0.87）。
+
+  修复：判据从"帧差小"改为"帧差 ≈ 0（相机重发上一帧）"，阈值改为
+
+  ```
+  upper         = max(profile_floor, min(0.5 × p25, 0.01))
+  duplicate_eps = min(max(profile_floor, 0.25 × p10), upper)
+  ```
+
+  `0.5 × p25` 这个上界是关键：它保证阈值始终落在该相机自身分布的低端；
+  上限 0.01 则兜住"整段几乎不动"的极端情况。`profile_floor` 固定 0.002（容
+  codec 抖动），**不随 profile 变**——两帧是否相同是文件的物理事实，不是判罚尺度。
+
+- **`video_freeze` 的 profile 里 `min_freeze_duration_sec` 从未生效**。代码一直
+  读模块常量 `_FREEZE_MIN_SECONDS`（0.5s），strict 声明的 0.3s 与 lenient 声明的
+  1.0s 都只是文档。现改为从 profile 取值，`details.params.min_freeze_seconds`
+  同步反映实际值。
+
+- **`video_freeze` 的报告补上可核验的数字**。`details.freeze_regions` 每段新增
+  `mean_diff_in_span` 与 `duplicate_eps`，`details.stream_motion_profile` 按相机
+  给出 median_diff / p90_diff / duplicate_eps / duplicate_ratio。此前报告只说
+  "froze N times"，读的人无法判断到底是"0 变化"还是"小变化"——这正是本次误判
+  能骗过报告的原因。
+
+### Tests
+- 新增 3 条 `video_freeze` 回归用例：固定机位低运动视频不判冻结、duplicate 阈值
+  受该流自身运动约束、真重发帧仍判 EXCLUDE。三条在修复前的代码上全部失败。
+- 端到端复核：FineART 6 集子集 **6/6 PASS、freeze_region_count 全 0、exit 0**
+  （此前 5 EXCLUDE / 1 REVIEW）；缺陷注入集（ep3 十帧 state=NaN、ep4 删 50 帧）
+  仍精确命中 2 集 EXCLUDE。全量 `435 passed, 5 skipped`。
+
 ## 0.12.1 - 2026-10-29
 
 ### Fixed
