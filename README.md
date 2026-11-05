@@ -43,12 +43,16 @@ Output options: `--format json` for scripting, `-o FILE` to save elsewhere.
 
 Audited on [ArmnetBench](https://huggingface.co/datasets/armnet/armnetbench_v01_lerobot_so101) (SO-101 arm, 2,499 episodes) and [DROID](https://droid-dataset.github.io/) (100 episodes):
 
-| Metric | ArmnetBench (200 ep subset) | DROID (100 ep) |
+| Metric | ArmnetBench (2,499 ep) | DROID (100 ep) |
 |--------|---------------------------|----------------|
-| Action spikes detected | 5,229 | 1,428 |
-| Median idle ratio | 68.6% | 70.7% |
-| Median episode duration | 22.4s | 15.0s |
+| Action spikes detected | 5,229 (200-ep subset run) | 1,428 |
+| Median idle ratio | 0.2% | 8.6% |
+| Median episode duration | 22.4s (200-ep subset run) | 15.0s |
 | Verdict | All PASS | All PASS |
+
+> Idle ratios re-measured at v0.12.3. The earlier values (68.6% / 70.7%) came from a
+> `3 × MAD` fallback that overshoots the median on continuously moving data; see
+> [`docs/benchmark.md`](docs/benchmark.md#v0123-re-measurement-idle-column-only).
 
 Both are curated benchmark datasets — all episodes pass. RDA also runs on noisier, real-world collections where REVIEW/EXCLUDE verdicts appear more frequently.
 

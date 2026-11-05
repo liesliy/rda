@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.12.3 - 2026-11-05
+
+### Fixed
+- **`idle_ratio` 的 `3 × MAD` 回退把连续运动判成「大部分时间没动」（D-28）**。
+  未检出双峰结构时，旧实现回退到 `3 × MAD`。MAD 是**离散度**统计量
+  （平滑单峰分布下 ≈0.54σ），`3 × MAD` 落在约 1.6σ 处——**高于中位数**，
+  于是任何连续运动轨迹都被判成多数帧空闲。这不是数据质量问题，是判据由构造决定。
+
+  触发条件比想象中普遍：14 个公开基准里，`libero_10` 96%、`aloha_sim_*` 76–100%、
+  `droid_100` 90%、`cmu_stretch` 100% 的集走的是这条回退路径。
+
+  实测（同一套默认参数，仅换回退规则，中位空闲率）：
+
+  | 数据集 | 集数 | 旧 | 新 |
+  |---|---:|---:|---:|
+  | `libero_10` | 379 | 71.7% | **1.7%** |
+  | `aloha_sim_transfer_cube_human` | 50 | 71.2% | **0.6%** |
+  | `droid_100` | 100 | 70.7% | **8.6%** |
+  | `cmu_stretch` | 135 | 66.7% | **38.1%** |
+  | `svla_so101_pickplace` | 50 | 86.7% | **29.5%** |
+  | ArmnetBench | 2,499 | 66.9% | **0.2%** |
+  | `xarm_push_medium` | 800 | 83.3% | 83.3%（走双峰路径，不动） |
+  | `pusht` | 206 | 81.7% | 81.1% |
+  | `imperialcollege_sawyer_wrist_cam` | 170 | 94.7% | 94.7%（同上） |
+
+  修复：未检出静止模态时，说明数据里**没有**可分离的静止簇，回退改为
+  `IDLE_FALLBACK_RATIO × median(逐帧运动量)`（默认 0.10，即「一帧位移不到该集
+  典型位移的十分之一」），低于 `1e-6` 再落到下限。真正接近零的帧（停顿）无论
+  分布形状都会被这个判据捕获，所以不牺牲对真实空闲的敏感度。
+
+- **`rda audit` 与 `rda recommend` 的空闲阈值是两份拷贝**。`rda/metrics/motion.py`
+  与 `rda/recommend/temporal_metrics.py` 各有一份 `_find_bimodal_threshold` 和
+  回退逻辑，改一处不会同步另一处。现抽为
+  `rda.metrics.motion.select_idle_threshold()` 单点实现，两条路径共用；新增测试
+  `tests/test_idle_threshold_selection.py::test_audit_and_recommend_agree_on_idle_ratio`
+  钉住一致性。
+
+### Changed
+- `IdleRatioMetric(mad_multiplier=...)` 与 `compute_idle_mask(mad_multiplier=...)`
+  的 `mad_multiplier` 参数**已废弃**（传非 None 会发 `DeprecationWarning` 并忽略），
+  改用 `idle_fallback_ratio`。
+- 报告的 `details.threshold_method` 不再出现 `"mad"`，新增 `"median_ratio"`。
+- `docs/benchmark.md` 的 idle 列按 v0.12.3 重测（13/14 个数据集；
+  `utokyo_pr2_tabletop` 在 Hub 上已 404）。原「14 个数据集中 13 个空闲率 >63%」
+  的结论是回退 bug 的产物，已改写。
+
+### Known
+- `docs/provenance/idle_ratio/algorithm.md` 中引用的 ArmnetBench 成功/失败组 EMR
+  统计（0.238 / 0.355、ROC-AUC 0.8115）建立在旧阈值口径上，**需按 v0.12.3 复测后
+  再引用**。`docs/ARMNETBENCH_CALIBRATION_REPORT.md` 在仓库内不存在（README 的
+  链接自 v0.10 起即失效），一并留待补。
+
 ## 0.12.2 - 2026-11-03
 
 ### Fixed

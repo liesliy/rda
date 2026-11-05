@@ -6,6 +6,7 @@ smoothness, and idle/effective-motion ratio.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -651,6 +652,103 @@ class ActionDiscontinuityMetric(MetricBase):
 # Metric 10 — Idle / Effective-motion Ratio
 # ---------------------------------------------------------------------------
 
+IDLE_FALLBACK_RATIO: float = 0.10
+"""Fallback idle threshold as a fraction of the episode's median step motion.
+
+Used only when no bimodal gap is found (v0.12.3). See
+``docs/provenance/idle_ratio/algorithm.md``.
+"""
+
+
+def _find_bimodal_gap(motion: np.ndarray,
+                      num_bins: int = 30,
+                      min_low_cluster_fraction: float = 0.1,
+                      abs_threshold_floor: float = 1e-6) -> Optional[float]:
+    """Return the bimodal-gap threshold, or None when no gap is detected.
+
+    A gap is a sparse histogram bin (``< 1 %`` of frames) that falls after
+    a non-trivial low cluster (``>= min_low_cluster_fraction``) and before
+    motion picks back up — i.e. evidence of a *static mode* separated from
+    a moving mode.
+    """
+    if motion.size < 10:
+        return None
+    # Guard against NaN/Inf — filter to finite values only
+    finite_mask = np.isfinite(motion)
+    finite_motion = motion[finite_mask]
+    if finite_motion.size < 10:
+        return None
+    max_motion = float(np.max(finite_motion))
+    if max_motion <= abs_threshold_floor:
+        return None
+    hist, bin_edges = np.histogram(finite_motion, bins=num_bins, range=(0.0, max_motion))
+    total = motion.size
+    low_cluster_count = 0
+    threshold_candidate: Optional[float] = None
+    in_valley = False
+    valley_min = float("inf")
+
+    for i in range(len(hist)):
+        frac = hist[i] / total
+        low_cluster_count += hist[i]
+        low_frac = low_cluster_count / total
+        if low_frac >= min_low_cluster_fraction and frac < 0.01:
+            in_valley = True
+            if hist[i] < valley_min:
+                valley_min = hist[i]
+                threshold_candidate = float(bin_edges[i + 1])
+        elif in_valley and frac > 0.02:
+            if threshold_candidate is not None and threshold_candidate > 0:
+                return threshold_candidate
+            in_valley = False
+            valley_min = float("inf")
+    return None
+
+
+def select_idle_threshold(motion: np.ndarray,
+                          fallback_ratio: float = IDLE_FALLBACK_RATIO,
+                          abs_threshold_floor: float = 1e-6,
+                          num_bins: int = 30,
+                          min_low_cluster_fraction: float = 0.1
+                          ) -> Tuple[float, str]:
+    """Pick the per-episode idle threshold.
+
+    Two-tier selection (v0.12.3):
+
+    1. **bimodal_gap** — the trajectory has a real static mode; cut at the
+       valley that separates it from the moving mode. Unchanged behaviour.
+    2. **median_ratio** — *no* static mode was found, so there is nothing
+       to separate. Cut at ``fallback_ratio × median step motion``: a frame
+       counts as idle only if it moves slower than a tenth of the episode's
+       typical step. Falls through to **floor** when that lands below
+       ``abs_threshold_floor`` (e.g. a perfectly frozen episode, where the
+       median is 0 and every step is idle).
+
+    The previous fallback used ``3 × MAD``. MAD is a *spread* statistic
+    (≈0.54σ for a smooth unimodal distribution), so ``3 × MAD`` sits near
+    1.6σ — above the median — and by construction labels the bulk of a
+    continuously moving trajectory as "idle". Measured consequence before
+    the fix: 71.2 % median idle on ``lerobot/aloha_sim_transfer_cube_human``
+    and 70.7 % on ``lerobot/droid_100``, i.e. healthy continuous motion
+    reported as a stuck arm.
+
+    Returns:
+        ``(threshold, method)`` where method is ``bimodal_gap``,
+        ``median_ratio`` or ``floor``.
+    """
+    gap = _find_bimodal_gap(motion, num_bins=num_bins,
+                            min_low_cluster_fraction=min_low_cluster_fraction,
+                            abs_threshold_floor=abs_threshold_floor)
+    if gap is not None:
+        return float(gap), "bimodal_gap"
+
+    median = float(np.median(motion)) if motion.size else 0.0
+    threshold = fallback_ratio * median
+    if threshold < abs_threshold_floor:
+        return float(abs_threshold_floor), "floor"
+    return float(threshold), "median_ratio"
+
+
 class IdleRatioMetric(MetricBase):
     """Measure the proportion of idle / near-static frames.
     
@@ -665,51 +763,34 @@ class IdleRatioMetric(MetricBase):
     # in rda/audit/rules.py (check_frozen_episode). These parameters control
     # the per-episode idle segmentation, not the frozen verdict.
     # See docs/provenance/idle_ratio/algorithm.md for calibration data.
-    mad_multiplier: float = 3.0
     abs_threshold_floor: float = 1e-6
     num_bins: int = 30
     min_low_cluster_fraction: float = 0.1
+    idle_fallback_ratio: float = IDLE_FALLBACK_RATIO
 
-    def __init__(self, mad_multiplier: float = 3.0, abs_threshold_floor: float = 1e-6,
-                 num_bins: int = 30, min_low_cluster_fraction: float = 0.1) -> None:
-        self.mad_multiplier = float(mad_multiplier)
+    def __init__(self, mad_multiplier: Optional[float] = None,
+                 abs_threshold_floor: float = 1e-6,
+                 num_bins: int = 30,
+                 min_low_cluster_fraction: float = 0.1,
+                 idle_fallback_ratio: float = IDLE_FALLBACK_RATIO) -> None:
+        if mad_multiplier is not None:
+            warnings.warn(
+                "mad_multiplier no longer affects the idle threshold since v0.12.3; "
+                "the fallback is now idle_fallback_ratio (fraction of median step "
+                "motion). Pass idle_fallback_ratio instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.abs_threshold_floor = float(abs_threshold_floor)
         self.num_bins = int(num_bins)
         self.min_low_cluster_fraction = float(min_low_cluster_fraction)
+        self.idle_fallback_ratio = float(idle_fallback_ratio)
 
     def _find_bimodal_threshold(self, motion: np.ndarray) -> Optional[float]:
-        if motion.size < 10:
-            return None
-        # Guard against NaN/Inf — filter to finite values only
-        finite_mask = np.isfinite(motion)
-        finite_motion = motion[finite_mask]
-        if finite_motion.size < 10:
-            return None
-        max_motion = float(np.max(finite_motion))
-        if max_motion <= self.abs_threshold_floor:
-            return None
-        hist, bin_edges = np.histogram(finite_motion, bins=self.num_bins, range=(0.0, max_motion))
-        total = motion.size
-        low_cluster_count = 0
-        threshold_candidate: Optional[float] = None
-        in_valley = False
-        valley_min = float("inf")
-
-        for i in range(len(hist)):
-            frac = hist[i] / total
-            low_cluster_count += hist[i]
-            low_frac = low_cluster_count / total
-            if low_frac >= self.min_low_cluster_fraction and frac < 0.01:
-                in_valley = True
-                if hist[i] < valley_min:
-                    valley_min = hist[i]
-                    threshold_candidate = float(bin_edges[i + 1])
-            elif in_valley and frac > 0.02:
-                if threshold_candidate is not None and threshold_candidate > 0:
-                    return threshold_candidate
-                in_valley = False
-                valley_min = float("inf")
-        return None
+        """Backward-compatible wrapper around the shared gap detector."""
+        return _find_bimodal_gap(motion, num_bins=self.num_bins,
+                                 min_low_cluster_fraction=self.min_low_cluster_fraction,
+                                 abs_threshold_floor=self.abs_threshold_floor)
 
     def compute(self, episode: EpisodeData) -> MetricResult:
         action = _primary_action_array(episode)
@@ -758,17 +839,16 @@ class IdleRatioMetric(MetricBase):
 
         motion = np.linalg.norm(delta, axis=1)
 
-        # Threshold selection
-        threshold = self._find_bimodal_threshold(motion)
-        method = "bimodal_gap"
-        mad = _mad(motion)
-
-        if threshold is None:
-            threshold = self.mad_multiplier * mad
-            method = "mad"
-        if threshold < self.abs_threshold_floor:
-            threshold = self.abs_threshold_floor
-            method = "floor" if method == "mad" else method
+        # Threshold selection (v0.12.3): shared with rda.recommend.temporal_metrics
+        # so the audit and the recommendation engine can never diverge again.
+        threshold, method = select_idle_threshold(
+            motion,
+            fallback_ratio=self.idle_fallback_ratio,
+            abs_threshold_floor=self.abs_threshold_floor,
+            num_bins=self.num_bins,
+            min_low_cluster_fraction=self.min_low_cluster_fraction,
+        )
+        mad = _mad(motion)  # diagnostic only; no longer drives the threshold
 
         details["threshold"] = float(threshold)
         details["threshold_method"] = method

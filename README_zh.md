@@ -166,7 +166,7 @@ for name, metric in result.metrics.items():
 > 需要时通过 `--video-quality` 或 `--full` 开启。
 
 **L3 — 数据集画像（效率与覆盖）**
-`idle_ratio`（三级回退：30-bin 谷底 → 3×MAD → 1e-6 下限）·
+`idle_ratio`（两级阈值：30-bin 谷底 → 中位位移的 10%，另有 1e-6 下限兜底）·
 `distribution` · `coverage` · `temporal_structure`
 
 **L4 — 安全与隐私（`pii_scan`，v0.9.22+）**
@@ -191,12 +191,17 @@ Tier-3 平台专属（关节限位、工作空间、力矩/力/触觉）。
 **12 个本地数据集、4,959 集、同一套默认阈值、零调参**——完整表格见
 [docs/benchmark.md](docs/benchmark.md)。
 
-**四个热门 LeRobot 数据集实测（v0.9.4）**——我们用 RDA 跑了
+**四个热门 LeRobot 数据集实测（v0.12.3 重测）**——我们用 RDA 跑了
 `lerobot/pusht`、`aloha_sim_transfer_cube_human`、`xarm_lift_medium` 和
 `droid_100`（共 1,156 集，覆盖 2-DOF 仿真、14-DOF 双臂仿真、4-DOF 单臂和
 7-DOF Franka）。全部通过 L1 完整性；但数据集画像差异显著——中位空闲帧占比
-从 xArm 的 **20.8%** 到 PushT 的 **81.7%**，双臂 ALOHA 仿真每集中位突变
+从 ALOHA 仿真的 **0.6%** 到 PushT 的 **81.1%**，双臂 ALOHA 仿真每集中位突变
 30.5 次。所有数字都可直接用 PyPI 包复现（`pip install robot-data-audit`）。
+
+> v0.12.3 修正了 `idle_ratio` 的回退阈值：未检出静止模态时不再用 `3 × MAD`
+> （该值高于中位数，会把连续运动误判成"大部分时间没动"）。这四个数据集的
+> 空闲率由 v0.9.4 的 20.8%~81.7% 修正为 0.6%~81.1%，差异见
+> [docs/benchmark.md](docs/benchmark.md#v0123-re-measurement-idle-column-only)。
 
 **lerobot/libero_10（v3.0）全量审计**——379 集、101,469 帧：所有适用的
 完整性检查通过、0 个硬伤。**[查看报告 →](docs/benchmark_libero10.md)**

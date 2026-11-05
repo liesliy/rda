@@ -30,10 +30,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+import warnings
 
 import numpy as np
 
 from rda.io.schema import EpisodeData
+from rda.metrics.motion import IDLE_FALLBACK_RATIO, select_idle_threshold
 
 # REQ-3 (v0.6.0): minimum length of a consecutive non-idle segment for it
 # to count as "usable" in usable_retention_ratio. Aligned with openpi's
@@ -80,51 +82,11 @@ def _mad(values: np.ndarray) -> float:
     return float(np.median(np.abs(values - med)))
 
 
-def _find_bimodal_threshold(motion: np.ndarray) -> Optional[float]:
-    """Find a bimodal-gap threshold in the motion distribution.
-
-    Mirrors ``IdleRatioMetric._find_bimodal_threshold``.
-    """
-    if motion.size < 10:
-        return None
-    finite_mask = np.isfinite(motion)
-    finite_motion = motion[finite_mask]
-    if finite_motion.size < 10:
-        return None
-    max_motion = float(np.max(finite_motion))
-    abs_floor = 1e-6
-    num_bins = 30
-    min_low_cluster_fraction = 0.1
-    if max_motion <= abs_floor:
-        return None
-    hist, bin_edges = np.histogram(finite_motion, bins=num_bins, range=(0.0, max_motion))
-    total = motion.size
-    low_cluster_count = 0
-    threshold_candidate: Optional[float] = None
-    in_valley = False
-    valley_min = float("inf")
-    for i in range(len(hist)):
-        frac = hist[i] / total
-        low_cluster_count += hist[i]
-        low_frac = low_cluster_count / total
-        if low_frac >= min_low_cluster_fraction and frac < 0.01:
-            in_valley = True
-            if hist[i] < valley_min:
-                valley_min = hist[i]
-                threshold_candidate = float(bin_edges[i + 1])
-        elif in_valley and frac > 0.02:
-            if threshold_candidate is not None and threshold_candidate > 0:
-                return threshold_candidate
-            in_valley = False
-            valley_min = float("inf")
-    # Valley extends to end without confirmed second peak → fall back to MAD
-    return None
-
-
 def compute_idle_mask(
     episode: EpisodeData,
-    mad_multiplier: float = 3.0,
+    mad_multiplier: Optional[float] = None,
     abs_threshold_floor: float = 1e-6,
+    idle_fallback_ratio: float = IDLE_FALLBACK_RATIO,
 ) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
     """Compute the per-frame idle mask for an episode.
 
@@ -132,10 +94,17 @@ def compute_idle_mask(
     inter-frame step). A step is "idle" if the action-norm delta
     is below the data-driven threshold.
 
+    Threshold selection is delegated to
+    :func:`rda.metrics.motion.select_idle_threshold` so this path and
+    ``rda audit`` can never disagree.
+
     Args:
         episode: The episode to analyze.
-        mad_multiplier: Multiplier for MAD-based threshold fallback.
+        mad_multiplier: Deprecated (v0.12.3) — no longer affects the
+            threshold. Use ``idle_fallback_ratio``.
         abs_threshold_floor: Absolute minimum threshold.
+        idle_fallback_ratio: Fallback threshold as a fraction of the
+            episode's median step motion, used when no bimodal gap exists.
 
     Returns:
         A tuple ``(idle_mask, info)`` where ``idle_mask`` is a 1-D
@@ -163,17 +132,20 @@ def compute_idle_mask(
 
     motion = np.linalg.norm(delta, axis=1)
 
-    # Threshold selection — same logic as IdleRatioMetric
-    threshold = _find_bimodal_threshold(motion)
-    method = "bimodal_gap"
-    mad = _mad(motion)
-
-    if threshold is None:
-        threshold = mad_multiplier * mad
-        method = "mad"
-    if threshold < abs_threshold_floor:
-        threshold = abs_threshold_floor
-        method = "floor" if method == "mad" else method
+    # Threshold selection — shared with IdleRatioMetric (v0.12.3)
+    if mad_multiplier is not None:
+        warnings.warn(
+            "mad_multiplier no longer affects the idle threshold since v0.12.3; "
+            "use idle_fallback_ratio instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    threshold, method = select_idle_threshold(
+        motion,
+        fallback_ratio=idle_fallback_ratio,
+        abs_threshold_floor=abs_threshold_floor,
+    )
+    mad = _mad(motion)  # diagnostic only; no longer drives the threshold
 
     idle_mask = motion < threshold
 
@@ -268,17 +240,21 @@ class TemporalSufficiency:
 
 def compute_temporal_sufficiency(
     episode: EpisodeData,
-    mad_multiplier: float = 3.0,
+    mad_multiplier: Optional[float] = None,
     abs_threshold_floor: float = 1e-6,
     window_sizes: Tuple[int, ...] = (5, 10, 20),
+    idle_fallback_ratio: float = IDLE_FALLBACK_RATIO,
 ) -> Optional[TemporalSufficiency]:
     """Compute temporal sufficiency metrics for a single episode.
 
     Args:
         episode: The episode to analyze.
-        mad_multiplier: MAD multiplier for idle threshold fallback.
+        mad_multiplier: Deprecated (v0.12.3) — no longer affects the
+            threshold. Use ``idle_fallback_ratio``.
         abs_threshold_floor: Minimum absolute threshold.
         window_sizes: Window sizes for valid-window-ratio computation.
+        idle_fallback_ratio: Fallback threshold as a fraction of median
+            step motion.
 
     Returns:
         A :class:`TemporalSufficiency` object, or ``None`` if the
@@ -288,6 +264,7 @@ def compute_temporal_sufficiency(
         episode,
         mad_multiplier=mad_multiplier,
         abs_threshold_floor=abs_threshold_floor,
+        idle_fallback_ratio=idle_fallback_ratio,
     )
 
     if idle_mask is None:
