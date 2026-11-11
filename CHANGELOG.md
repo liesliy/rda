@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.12.4 - 2026-11-11
+
+### Fixed
+- **`conform` 的 `doi_uri_present`（6.2.7 f，应类）把"读了但没找到"误判成 UNDETERMINED**。
+  旧实现只在该键名命中 doi/uri/url/identifier/permalink/homepage/paper 时才把
+  info.json 记入已检索载体，于是"info.json 可读、但没有任何标识键"落进了
+  `not scanned` 分支——报出"既没有可读的 meta/info.json"的错误理由，并给出
+  UNDETERMINED。四态语义下这是**已查实的不符合**，应为 FAIL；UNDETERMINED 只
+  保留给"info.json 不可解析且无 README"这一种情形。
+  - `DatasetView` 新增 `info_readable`，区分"文件缺失 / JSON 损坏 / 解析成功
+    （含空对象）"三种状态（`rda/conform/engine.py`）。
+  - `check_doi_uri` 改为按"载体是否可读"决定可判定性；FAIL 理由如实写明
+    "已检索 meta/info.json，未检出标识；info.json 中没有任何键名含 … 的字段"，
+    `details` 增加 `surfaces` / `id_key_hits`（`rda/conform/checks.py`）。
+  - 新增测试：`test_doi_uri_fail_when_surfaces_readable_but_no_identifier`、
+    `test_doi_uri_undetermined_only_when_no_surface_at_all`。
+- **`STANDARD_TITLE` 标准名称与正式发布文本不符**。旧值"机器人 数据集质量
+  第1部分：评测指南"，国家标准馆著录的正式名称为《人工智能 具身智能数据
+  质量规范 第1部分：真实数据》（GB/Z 218.1-2026，2026-08-27 发布并实施，
+  归口 TC28/SC42）。已订正常量并加注释注明出处；`conform` 的 markdown 报告
+  头部现引用标准全称 + 编号，不再只写编号。
+- **`rda/conform/checks.py` 引用了未导入的 `Path`**（`_resolve_video_file` 的
+  返回注解 `Optional[Path]`）。此前靠 `from __future__ import annotations`
+  的惰性求值侥幸不报错——任何对该注解求值的路径（`typing.get_type_hints`、
+  部分序列化/文档工具）都会当场 `NameError`。已补 `from pathlib import Path`。
+
 ## 0.12.3 - 2026-11-05
 
 ### Fixed

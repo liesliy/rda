@@ -17,6 +17,7 @@ from rda.conform.standards.gbz218_1 import (
     ORIGIN_ENGINEERING,
     ORIGIN_LABEL,
     ORIGIN_STANDARD,
+    STANDARD_TITLE,
 )
 from rda.conform.verdict import Verdict
 
@@ -104,7 +105,7 @@ def render_conformance_markdown(result: ConformanceResult,
     add(f"# RDA 符合性测评报告 — {result.standard}")
     add("")
     add(f"- 数据集：`{result.dataset}`")
-    add(f"- 标准：{result.standard}")
+    add(f"- 标准：{STANDARD_TITLE}（编号 {result.standard}）")
     add(f"- RDA 版本：{rda_version}")
     if generated_at:
         add(f"- 生成时间：{generated_at}")

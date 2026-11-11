@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -923,19 +924,23 @@ def check_doi_uri(view, profile: ConformProfile, options) -> ConformanceItem:
         "在 (1) meta/info.json 中键名含 doi/uri/url/identifier/permalink/homepage "
         "的字段值、(2) README 的 YAML front-matter 同名键、(3) README 正文中的 "
         "**Homepage:** / **Paper:** 行，检索 DOI（10.xxxx/...）或 http(s) URI；"
-        "剔除 'More Information Needed' 等占位符。"
+        "剔除 'More Information Needed' 等占位符。载体可读但未检出标识 → FAIL；"
+        "info.json 不可解析且无 README → UNDETERMINED（没查实 ≠ 符合，也 ≠ 不符合）。"
     )
 
     found: List[Dict[str, str]] = []
-    scanned: List[str] = []
+    surfaces: List[str] = []      # 实际存在并已检索的说明载体
+    id_key_hits: List[str] = []   # 命中标识类键名的具体位置
     placeholder_hits: List[str] = []
 
     info = view.info
+    if view.info_readable:
+        surfaces.append("meta/info.json")
     for key, val in info.items():
         kl = str(key).lower()
         if not any(tok in kl for tok in _ID_KEY_TOKENS):
             continue
-        scanned.append(f"info.json:{key}")
+        id_key_hits.append(f"info.json:{key}")
         sval = str(val).strip()
         if _is_placeholder(sval):
             placeholder_hits.append(f"info.json:{key}={sval}")
@@ -949,7 +954,7 @@ def check_doi_uri(view, profile: ConformProfile, options) -> ConformanceItem:
 
     card = view.dataset_card_text()
     if card:
-        scanned.append("README*.md")
+        surfaces.append("README*.md")
         for key in _ID_KEY_TOKENS:
             m = re.search(rf"^\s*{key}\s*:\s*(.+)$", card, re.IGNORECASE | re.MULTILINE)
             if not m:
@@ -980,26 +985,32 @@ def check_doi_uri(view, profile: ConformProfile, options) -> ConformanceItem:
                 found.append({"source": f"README:{label}", "kind": "URI",
                               "value": _URI_RE.search(raw).group(0)})
 
-    if not scanned:
+    if not surfaces:
         return _undetermined(
             th.clause, metric, th.describe(), th.binding, method,
-            "缺失输入：既没有可读的 meta/info.json，也没有根目录 README/"
-            "dataset card，无法核查是否提供了 DOI/URI 唯一标识。",
+            "缺失输入：既没有可解析的 meta/info.json，也没有根目录 README/"
+            "dataset card 可供检索，无法核查是否提供了 DOI/URI 唯一标识。",
         )
 
-    details = {"found": found, "scanned": scanned,
+    details = {"found": found, "surfaces": surfaces,
+               "id_key_hits": id_key_hits,
                "placeholders_rejected": placeholder_hits}
     if found:
         return _ok(th.clause, metric, True, th.describe(), th.binding, method,
                    "检出数据集级唯一标识：" +
                    "；".join(f"{f['kind']} {f['value']}（{f['source']}）" for f in found),
                    details)
+    note = "未检出数据集级 DOI/URI 唯一标识（已检索：" + "、".join(surfaces) + "）"
+    if view.info_readable and not any(
+            s.startswith("info.json:") for s in id_key_hits):
+        note += ("；meta/info.json 可读，但没有任何键名含 "
+                 "doi/uri/url/identifier/permalink/homepage/paper 的字段")
+    if placeholder_hits:
+        note += f"；检出的标识字段均为占位符：{', '.join(placeholder_hits)}"
+    note += ("。注：README 正文中指向工具仓库的链接（如 LeRobot 项目地址）"
+             "不算数据集自身的唯一标识，未予采信。")
     return _fail(th.clause, metric, False, th.describe(), th.binding, method,
-                 "未检出数据集级 DOI/URI 唯一标识"
-                 + (f"；检出的标识字段均为占位符：{', '.join(placeholder_hits)}"
-                    if placeholder_hits else "")
-                 + "。注：README 正文中指向工具仓库的链接（如 LeRobot 项目地址）"
-                   "不算数据集自身的唯一标识，未予采信。", details)
+                 note, details)
 
 
 # ---------------------------------------------------------------------------

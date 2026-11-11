@@ -266,6 +266,33 @@ def test_pass_state_is_reachable(tmp_path: Path):
     assert result.summary["mandatory_fail"] == 0
 
 
+def test_doi_uri_fail_when_surfaces_readable_but_no_identifier(tmp_path: Path):
+    """info.json 可读但没有标识键 → 必须判 FAIL，不许躲进 UNDETERMINED。
+
+    6.2.7 f 是"应"类条款：载体在手、只是没检出标识，这是**已查实的不符合**。
+    旧实现只在键名命中时才把载体记入 scanned，导致"读过 info.json 但没有
+    标识键"被误判成"没有可读输入"→ UNDETERMINED，且理由与事实不符。
+    """
+    ds = write_dataset(tmp_path / "ds", n_episodes=2, frames_per_ep=10)
+    it = item(run_conformance(ds), "doi_uri_present")
+    assert it.verdict == Verdict.FAIL
+    # 理由必须如实反映"读了、但没找到"，而不是"没有可读的 info.json"
+    assert "未检出数据集级 DOI/URI" in it.note
+    assert "没有任何键名含" in it.note
+    assert "可读" in it.note
+    assert it.details["surfaces"] == ["meta/info.json"]
+
+
+def test_doi_uri_undetermined_only_when_no_surface_at_all(tmp_path: Path):
+    """info.json 不存在且无 README → 才允许 UNDETERMINED。"""
+    ds = write_dataset(tmp_path / "ds", n_episodes=2, frames_per_ep=10)
+    (ds / "meta" / "info.json").unlink()
+    it = item(run_conformance(ds), "doi_uri_present")
+    assert it.verdict == Verdict.UNDETERMINED
+    assert "可解析的 meta/info.json" in it.note
+    assert it.details.get("surfaces", []) == []
+
+
 def test_motion_blur_not_applicable_without_video_features(tmp_path: Path):
     """数据集根本没声明视频流特征 → NOT_APPLICABLE（条款无从适用）。"""
     ds = write_dataset(tmp_path / "ds")

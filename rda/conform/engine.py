@@ -85,6 +85,7 @@ class DatasetView:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self._info: Optional[dict] = None
+        self._info_readable: Optional[bool] = None
         self._episodes_meta: Optional[List[dict]] = None
         self._tasks: Optional[Dict[int, str]] = None
         self._null_counts: Optional[Dict[str, Tuple[int, int]]] = None
@@ -100,15 +101,34 @@ class DatasetView:
     def info(self) -> dict:
         """``meta/info.json`` 的内容。文件缺失时返回空 dict。"""
         if self._info is None:
-            p = self.root / "meta" / "info.json"
-            if p.exists():
-                try:
-                    self._info = json.loads(p.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    self._info = {}
-            else:
-                self._info = {}
+            self._resolve_info()
         return self._info
+
+    @property
+    def info_readable(self) -> bool:
+        """``meta/info.json`` 是否存在且成功解析为 JSON。
+
+        区分三种情形：文件不存在（False）、存在但 JSON 损坏（False）、
+        存在且解析成功（True，包括解析结果为空对象 ``{}``）。
+        判定项据此区分「载体不可读 → UNDETERMINED」与
+        「载体可读但没有标识 → FAIL」，不得混为一谈。
+        """
+        if self._info is None:
+            self._resolve_info()
+        return bool(self._info_readable)
+
+    def _resolve_info(self) -> None:
+        p = self.root / "meta" / "info.json"
+        if p.exists():
+            try:
+                self._info = json.loads(p.read_text(encoding="utf-8"))
+                self._info_readable = True
+            except (json.JSONDecodeError, OSError):
+                self._info = {}
+                self._info_readable = False
+        else:
+            self._info = {}
+            self._info_readable = False
 
     @property
     def fps(self) -> Optional[float]:
