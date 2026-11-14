@@ -871,3 +871,136 @@ def test_conformance_node_shape(tmp_path: Path):
     for key in ("standard", "dataset", "overall_verdict", "summary", "items",
                 "observations", "profile", "dataset_info", "coverage_gate"):
         assert key in node
+
+
+# ---------------------------------------------------------------------------
+# 10. LeRobot v2.x 布局（回归：conform 曾只认 v3.0 命名）
+# ---------------------------------------------------------------------------
+
+
+def write_v21_dataset(
+    root: Path,
+    *,
+    n_episodes: int = 2,
+    frames_per_ep: int = 20,
+    fps: int = 10,
+) -> Path:
+    """写一个最小的 **v2.1** 数据集：一集一文件，元数据只有 jsonl。
+
+    与 :func:`write_dataset` 的差别不只是文件名——v2.1 没有
+    ``meta/episodes/*.parquet``，也没有 ``dataset_from_index``，这两点正是
+    旧版 conform 的分辨率盲区。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    data_dir = root / "data" / "chunk-000"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (root / "meta").mkdir(parents=True, exist_ok=True)
+
+    ep_lines: List[str] = []
+    frame_cursor = 0
+    for e in range(n_episodes):
+        ep_col: List[int] = []
+        ts_col: List[float] = []
+        fi_col: List[int] = []
+        idx_col: List[int] = []
+        act_col: List[List[float]] = []
+        st_col: List[List[float]] = []
+        for f in range(frames_per_ep):
+            ep_col.append(e)
+            ts_col.append(round(f / fps, 9))
+            fi_col.append(f)
+            idx_col.append(frame_cursor + f)
+            act_col.append([0.1 * f] * STATE_DIM)
+            st_col.append([0.1 * f] * STATE_DIM)
+        pq.write_table(
+            pa.table(
+                {
+                    "episode_index": pa.array(ep_col),
+                    "timestamp": pa.array(ts_col),
+                    "frame_index": pa.array(fi_col),
+                    "index": pa.array(idx_col),
+                    "action": pa.array(act_col),
+                    "observation.state": pa.array(st_col),
+                    "task_index": pa.array([0] * frames_per_ep),
+                }
+            ),
+            data_dir / f"episode_{e:06d}.parquet",
+        )
+        ep_lines.append(
+            json.dumps({"episode_index": e, "tasks": ["pick"], "length": frames_per_ep})
+        )
+        frame_cursor += frames_per_ep
+
+    (root / "meta" / "episodes.jsonl").write_text(
+        "\n".join(ep_lines) + "\n", encoding="utf-8"
+    )
+    (root / "meta" / "tasks.jsonl").write_text(
+        json.dumps({"task_index": 0, "task": "pick"}) + "\n", encoding="utf-8"
+    )
+    info = {
+        "codebase_version": "v2.1",
+        "robot_type": "test_robot",
+        "total_episodes": n_episodes,
+        "total_frames": n_episodes * frames_per_ep,
+        "total_tasks": 1,
+        "fps": fps,
+        "chunks_size": 1000,
+        "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+        "features": {
+            "action": {"dtype": "float32", "shape": [STATE_DIM]},
+            "observation.state": {"dtype": "float32", "shape": [STATE_DIM]},
+            "timestamp": {"dtype": "float32", "shape": [1]},
+            "frame_index": {"dtype": "int64", "shape": [1]},
+            "episode_index": {"dtype": "int64", "shape": [1]},
+            "index": {"dtype": "int64", "shape": [1]},
+            "task_index": {"dtype": "int64", "shape": [1]},
+        },
+    }
+    (root / "meta" / "info.json").write_text(
+        json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return root
+
+
+def test_v21_data_files_are_resolved(tmp_path: Path):
+    """v2.1 的 data/chunk-*/episode_*.parquet 必须被认出来。"""
+    from rda.conform.engine import DatasetView
+
+    ds = write_v21_dataset(tmp_path / "ds21", n_episodes=2, frames_per_ep=20)
+    view = DatasetView(ds)
+    assert view.codebase_version == "v2.1"
+    files = view.data_files
+    assert len(files) == 2
+    assert all(f.name.startswith("episode_") for f in files)
+    # 认对了文件，才谈得上读列
+    assert "observation.state" in view.parquet_columns
+    assert view.episode_ids() == [0, 1]
+
+
+def test_v21_episodes_meta_falls_back_to_jsonl(tmp_path: Path):
+    """没有 meta/episodes/ 时，从 episodes.jsonl 补出绝对偏移。"""
+    from rda.conform.engine import DatasetView
+
+    ds = write_v21_dataset(tmp_path / "ds21", n_episodes=3, frames_per_ep=20)
+    rows = DatasetView(ds).episodes_meta
+    assert [r["episode_index"] for r in rows] == [0, 1, 2]
+    assert [r["dataset_from_index"] for r in rows] == [0, 20, 40]
+    assert [r["dataset_to_index"] for r in rows] == [20, 40, 60]
+
+
+def test_v21_does_not_report_missing_input(tmp_path: Path):
+    """关键回归：v2.1 不得被报成"data 目录下未找到任何 parquet 文件"。
+
+    旧行为把"格式不认识"记成输入缺失——那是给用户一个错误的原因。
+    """
+    ds = write_v21_dataset(tmp_path / "ds21", n_episodes=2, frames_per_ep=20)
+    result = run_conformance(ds)
+    notes = " ".join((item.note or "") for item in result.items)
+    assert "未找到任何 parquet" not in notes
+    # 字段缺失率这类逐帧判定必须真的跑起来，而不是因为读不到文件变成 UNDETERMINED
+    frames_checked = [
+        item
+        for item in result.items
+        if item.value is not None and item.clause in ("6.2.2.1 a", "6.2.2.1 b")
+    ]
+    assert frames_checked, "v2.1 的字段缺失率判定没有产生任何数值"

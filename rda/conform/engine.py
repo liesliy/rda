@@ -160,9 +160,26 @@ class DatasetView:
         return list(self.feature_specs().keys())
 
     @property
+    def codebase_version(self) -> str:
+        """``meta/info.json`` → ``codebase_version``（如 ``"v3.0"``），缺失时为空串。"""
+        return str(self.info.get("codebase_version") or "")
+
+    @property
+    def data_file_pattern(self) -> str:
+        """``data/`` 下该格式的文件命名。
+
+        LeRobot 改过命名：v2.x 是 ``data/chunk-*/episode_*.parquet``（一集一文件），
+        v3.0 起是 ``data/chunk-*/file-*.parquet``（多集合并进同一文件）。
+        只认 v3.0 命名会把"格式不认识"报成"输入缺失"——两者结论完全不同。
+        """
+        if self.codebase_version.startswith("v2."):
+            return "chunk-*/episode_*.parquet"
+        return "chunk-*/file-*.parquet"
+
+    @property
     def data_files(self) -> List[Path]:
-        """All ``data/chunk-*/file-*.parquet`` paths, sorted."""
-        return sorted((self.root / "data").glob("chunk-*/file-*.parquet"))
+        """All data parquet paths for this dataset's format, sorted."""
+        return sorted((self.root / "data").glob(self.data_file_pattern))
 
     @property
     def videos_dir(self) -> Path:
@@ -314,19 +331,66 @@ class DatasetView:
 
     @property
     def episodes_meta(self) -> List[dict]:
-        """Rows of ``meta/episodes/**.parquet`` as plain dicts (one per episode)."""
+        """Episode-level metadata, from v3.0 parquet or the v2.x jsonl fallback.
+
+        v3.0 写在 ``meta/episodes/chunk-*/file-*.parquet``；v2.x 只有
+        ``meta/episodes.jsonl``（每行一集，字段为 ``episode_index`` / ``length`` /
+        ``tasks``），既没有 ``dataset_from_index`` 也没有视频时间窗。这里把 jsonl
+        补成 v3.0 的形状（按行序累加 ``length`` 得到绝对偏移，这正是 v2.x 的语义：
+        数据文件按 episode 顺序拼接），缺的列（如 ``videos/...``）不补——
+        补了就等于替数据编造时间窗。
+        """
         if self._episodes_meta is not None:
             return self._episodes_meta
-        pq = self._require_pyarrow()
         rows: List[dict] = []
-        for p in sorted((self.root / "meta" / "episodes").glob("chunk-*/file-*.parquet")):
-            try:
-                tbl = pq.read_table(p)
-            except (OSError, ValueError):
-                continue
-            rows.extend(tbl.to_pylist())
+        ep_dir = self.root / "meta" / "episodes"
+        if ep_dir.exists():
+            pq = self._require_pyarrow()
+            for p in sorted(ep_dir.glob("chunk-*/file-*.parquet")):
+                try:
+                    tbl = pq.read_table(p)
+                except (OSError, ValueError):
+                    continue
+                rows.extend(tbl.to_pylist())
+        if not rows:
+            rows = self._load_episodes_meta_v21()
         self._episodes_meta = rows
         return rows
+
+    def _load_episodes_meta_v21(self) -> List[dict]:
+        """``meta/episodes.jsonl`` → v3.0 形状的 episode 行；文件不存在时返回空。"""
+        p = self.root / "meta" / "episodes.jsonl"
+        if not p.exists():
+            return []
+        try:
+            lines = p.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        out: List[dict] = []
+        cursor = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ep_idx = _i(rec.get("episode_index"))
+            if ep_idx is None:
+                continue
+            length = _i(rec.get("length")) or 0
+            out.append(
+                {
+                    "episode_index": ep_idx,
+                    "length": length,
+                    "dataset_from_index": cursor,
+                    "dataset_to_index": cursor + length,
+                    "tasks": rec.get("tasks", []),
+                }
+            )
+            cursor += length
+        return out
 
     def video_windows(self) -> Dict[str, Dict[int, Tuple[float, float, Optional[int]]]]:
         """Per-camera video time windows from the episode metadata.
