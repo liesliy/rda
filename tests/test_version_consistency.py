@@ -31,12 +31,18 @@ def test_dunder_version_matches_pyproject():
 
 
 def test_api_client_user_agent_version_matches():
-    """The recommend client advertises its version; keep it in sync."""
+    """The recommend client advertises its version; keep it in sync.
+
+    0.12.5 起 User-Agent 直接用 ``{__version__}`` 插值，版本漂移在构造上不再
+    可能发生，所以守卫从"字面量必须等于 __version__"收紧为"必须使用插值、
+    不得再写死版本号"——后者是原先那个坑的入口。
+    """
     source = (ROOT / "rda" / "recommend" / "api_client.py").read_text(
         encoding="utf-8"
     )
     agents = set(re.findall(r'"rda-cli/([^"]+)"', source))
     assert agents, "no rda-cli/<version> User-Agent found"
-    assert agents == {__version__}, (
-        f"User-Agent versions {sorted(agents)} != __version__ {__version__!r}"
+    assert agents == {"{__version__}"}, (
+        "User-Agent must interpolate rda.__version__ instead of hard-coding a "
+        f"version string; found {sorted(agents)}"
     )

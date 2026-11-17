@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.12.5 - 2026-11-17
+
+### Fixed
+- **`conform` 无法解析 LeRobot v2.x 与 v1.x 数据集**（#1、#2、#4）。
+  `DatasetView` 只按 v3.0 命名找文件——`data/chunk-*/file-*.parquet` 与
+  `meta/episodes/chunk-*/file-*.parquet`——从不读 `codebase_version`。
+  v2.1/v2.2 的 `data/chunk-*/episode_*.parquet` 和 v1.x 的 `data/*.parquet`
+  一个都匹配不上，于是 `data_files` 为空、`episode_ids()` 为空，报告给出
+  「data 目录下未找到任何 parquet 文件」，以总体 FAIL、覆盖率 0.25 收场。
+  这属于**把「布局不认识」报成「输入缺失」**，自 0.10.0 conform 上线起一直
+  存在，影响 0.10.0 ~ 0.12.4 全部版本。
+
+  **判定结果会变**：升级后 v2.x / v1.x 数据集的 PASS 数与覆盖率会明显上升。
+  这是解析正确之后的真实结果，不是判定放松。已用合成 v2.1 fixture 验证
+  （`data_files` 0→3、`episodes_meta` 0→3、PASS 0→4、覆盖率 0.25→0.58），
+  并补为回归测试。
+
+  - `DatasetView` 新增 `codebase_version` 属性（读 `meta/info.json`，缺失时为空串）
+    与 `data_file_pattern`（v2.x → `chunk-*/episode_*.parquet`，
+    其余 → `chunk-*/file-*.parquet`）。
+  - `data_files` 在按版本命名扫不到文件时，兜底扫 `data/**/*.parquet`，
+    覆盖 v1.x 与部分早期导出的扁平布局。
+  - episode 元数据：v3.0 读 `meta/episodes/chunk-*/file-*.parquet`；非 v3.0 在
+    parquet 缺失时回退 `meta/episodes.jsonl`。回退**限定为非 v3.0**——v2→v3
+    迁移后 jsonl 常留在原地，此时 parquet 读失败意味着元数据损坏，改从 jsonl
+    读出只会把损坏掩盖掉。
+  - `episodes.jsonl` 的 `length` 字段缺失时不再静默按 0 处理，改记 debug 日志。
+    该字段参与 `dataset_from_index` 累加，缺失会让其后 episode 的索引整体偏移。
+
+### Changed
+- `rda/recommend/api_client.py` 的 `User-Agent` 改为读取 `rda.__version__`，
+  不再硬编码版本号（此前两处硬编码，发版时容易漏改）。
+
 ## 0.12.4 - 2026-11-11
 
 ### Fixed

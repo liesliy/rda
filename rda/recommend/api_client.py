@@ -17,10 +17,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rda import __version__
 from rda.recommend.types import (
     RecommendationResult,
     TargetPolicy,
@@ -356,7 +356,7 @@ def _call_api(
         f"{api_url}/api/v1/recommend",
         json=body,
         timeout=REQUEST_TIMEOUT,
-        headers={"User-Agent": f"rda-cli/0.12.4"},
+        headers={"User-Agent": f"rda-cli/{__version__}"},
     )
 
     if resp.status_code == 429:
@@ -387,7 +387,7 @@ def _get_remote_rules_version() -> Optional[str]:
         resp = requests.get(
             f"{get_api_url()}/api/v1/health",
             timeout=10,
-            headers={"User-Agent": "rda-cli/0.12.4"},
+            headers={"User-Agent": f"rda-cli/{__version__}"},
         )
         if resp.status_code == 200:
             return resp.json().get("rules_version")
