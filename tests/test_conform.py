@@ -1004,3 +1004,72 @@ def test_v21_does_not_report_missing_input(tmp_path: Path):
         if item.value is not None and item.clause in ("6.2.2.1 a", "6.2.2.1 b")
     ]
     assert frames_checked, "v2.1 的字段缺失率判定没有产生任何数值"
+
+
+# ---------------------------------------------------------------------------
+# 11. 布局兜底与元数据来源选择
+# ---------------------------------------------------------------------------
+
+
+def write_v1_dataset(
+    root: Path,
+    *,
+    n_episodes: int = 2,
+    frames_per_ep: int = 10,
+) -> Path:
+    """写一个最小的 **v1.x** 数据集：parquet 直接放 ``data/`` 下，没有 chunk 层。
+
+    v1.x 与 v2.x 只差目录层级——v1 是 ``data/episode_000000.parquet``，
+    v2 起才加 ``chunk-*``。只认 chunk 命名会把"布局不认识"报成"输入缺失"，
+    和 v3.0 命名那次是同一类错误。
+    """
+    ds = write_v21_dataset(root, n_episodes=n_episodes, frames_per_ep=frames_per_ep)
+    chunk_dir = ds / "data" / "chunk-000"
+    for f in sorted(chunk_dir.glob("*.parquet")):
+        f.rename(ds / "data" / f.name)
+    chunk_dir.rmdir()
+    info_path = ds / "meta" / "info.json"
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    info["codebase_version"] = "v1.0"
+    info["data_path"] = "data/episode_{episode_index:06d}.parquet"
+    info_path.write_text(
+        json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return ds
+
+
+def test_v1x_flat_layout_is_resolved(tmp_path: Path):
+    """v1.x 的 ``data/*.parquet``（无 chunk 中间层）也必须被认出来。"""
+    from rda.conform.engine import DatasetView
+
+    ds = write_v1_dataset(tmp_path / "ds1", n_episodes=2, frames_per_ep=10)
+    view = DatasetView(ds)
+    assert view.codebase_version == "v1.0"
+    assert len(view.data_files) == 2
+    assert "observation.state" in view.parquet_columns
+    assert view.episode_ids() == [0, 1]
+
+
+def test_v30_does_not_fall_back_to_residual_jsonl(tmp_path: Path):
+    """v3.0 的 episode 元数据读不出来时，不得改用残留的 ``episodes.jsonl``。
+
+    v2.x → v3.0 迁移后 jsonl 常被留下。此时 parquet 读失败是"元数据损坏"，
+    换数据源把它"读出来"等于把损坏掩盖掉，还会用另一份可能过期的 ``length``
+    去算偏移。正确行为是如实返回空，让依赖它的判定走 UNDETERMINED。
+    """
+    from rda.conform.engine import DatasetView
+
+    ds = write_dataset(tmp_path / "ds30", n_episodes=2, frames_per_ep=10)
+    (ds / "meta" / "episodes.jsonl").write_text(
+        "\n".join(
+            json.dumps({"episode_index": e, "tasks": ["pick"], "length": 10})
+            for e in range(2)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    for p in (ds / "meta" / "episodes").glob("chunk-*/file-*.parquet"):
+        p.write_bytes(b"not a parquet file")
+    view = DatasetView(ds)
+    assert view.codebase_version == "v3.0"
+    assert view.episodes_meta == []

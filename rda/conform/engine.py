@@ -17,6 +17,7 @@ pyarrow 是**延迟导入**的。P0 不引入重依赖，pyarrow 只用于读 pa
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -178,8 +179,16 @@ class DatasetView:
 
     @property
     def data_files(self) -> List[Path]:
-        """All data parquet paths for this dataset's format, sorted."""
-        return sorted((self.root / "data").glob(self.data_file_pattern))
+        """All data parquet paths for this dataset's format, sorted.
+
+        按版本选出的命名找不到文件时，再往下扫一层：v1.x 与部分早期导出的
+        数据集把 parquet 直接放在 ``data/`` 下，没有 ``chunk-*`` 中间层。
+        不兜底就会把"布局不认识"报成"输入缺失"，和 v3.0 那次是同一类错误。
+        """
+        files = sorted((self.root / "data").glob(self.data_file_pattern))
+        if not files:
+            files = sorted((self.root / "data").glob("**/*.parquet"))
+        return files
 
     @property
     def videos_dir(self) -> Path:
@@ -352,7 +361,10 @@ class DatasetView:
                 except (OSError, ValueError):
                     continue
                 rows.extend(tbl.to_pylist())
-        if not rows:
+        if not rows and not self.codebase_version.startswith("v3."):
+            # 只有非 v3.0 才回退 jsonl。v3.0 的 episode 元数据在 parquet 里，
+            # 此时 jsonl 若还在只是迁移残留；parquet 读不出来是"元数据损坏"，
+            # 换个数据源把它读出来反而是把问题掩盖掉。
             rows = self._load_episodes_meta_v21()
         self._episodes_meta = rows
         return rows
@@ -379,7 +391,14 @@ class DatasetView:
             ep_idx = _i(rec.get("episode_index"))
             if ep_idx is None:
                 continue
-            length = _i(rec.get("length")) or 0
+            length = _i(rec.get("length"))
+            if length is None:
+                logging.getLogger(__name__).debug(
+                    "episodes.jsonl: episode %s 缺 length，其后 episode 的 "
+                    "dataset_from_index 会偏移不准",
+                    ep_idx,
+                )
+                length = 0
             out.append(
                 {
                     "episode_index": ep_idx,
