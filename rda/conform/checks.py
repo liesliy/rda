@@ -565,8 +565,9 @@ def check_multimodal_time_base(view, profile: ConformProfile, options) -> Confor
         return _undetermined(
             th.clause, metric, th.describe(), th.binding,
             "对比各视频流的时长（to − from）与帧层时间戳跨度。",
-            "缺失输入：meta/episodes/*.parquet 中没有 "
-            "videos/<key>/from_timestamp、to_timestamp 列，无法核查"
+            "缺失输入：episode 元数据（meta/episodes/*.parquet 或 "
+            "meta/episodes.jsonl）中没有 videos/<key>/from_timestamp、"
+            "to_timestamp 列，无法核查"
             "帧层与视频层是否同源。",
         )
 

@@ -239,6 +239,10 @@ def generate_json_report(result: DatasetAuditResult) -> Dict[str, Any]:
             "num_episodes": result.dataset_info.num_episodes,
             "total_frames": result.dataset_info.total_frames,
             "modalities": result.dataset_info.modalities,
+            # Declared LeRobot format version, verbatim (v2.0 / v2.1 / v3.0).
+            # Reports must record what the dataset declares, not a folded
+            # family label.
+            "format_version": result.dataset_info.meta.get("format_version"),
             "num_tasks": result.dataset_info.meta.get("num_tasks"),
             "tasks": _safe_task_map(result.dataset_info.meta.get("tasks", {})),
         },

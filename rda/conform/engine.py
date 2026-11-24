@@ -196,18 +196,32 @@ class DatasetView:
         return self.root / "videos"
 
     def video_payload_files(self, feature: str) -> List[Path]:
-        """Files under ``videos/<feature>/**`` (LeRobot v3 video layout).
+        """Files carrying the payload of ``feature`` (existence only).
+
+        v3.0 layout: ``videos/<feature>/**``；
+        v2.x layout: ``videos/chunk-*/<feature>/episode_XXXXXX.mp4``（每集一文件）。
 
         只判断**存在性**，不校验可解码性——本版本不引入 opencv/av，
         一个文件在不在是可以确定的，能不能解码不是。
         """
         base = self.videos_dir / feature
-        if not base.exists():
-            return []
-        try:
-            return sorted(p for p in base.rglob("*") if p.is_file())
-        except OSError:
-            return []
+        if base.exists():
+            try:
+                return sorted(p for p in base.rglob("*") if p.is_file())
+            except OSError:
+                return []
+        # v2.x: videos/chunk-XXX/<feature>/episode_XXXXXX.mp4
+        out: List[Path] = []
+        if self.videos_dir.exists():
+            for chunk_dir in sorted(self.videos_dir.glob("chunk-*")):
+                feature_dir = chunk_dir / feature
+                if not feature_dir.is_dir():
+                    continue
+                try:
+                    out.extend(sorted(p for p in feature_dir.iterdir() if p.is_file()))
+                except OSError:
+                    continue
+        return out
 
     def videos_dir_file_count(self) -> int:
         """Total files under ``videos/``; 0 when the directory is absent.

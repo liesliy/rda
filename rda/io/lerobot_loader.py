@@ -102,17 +102,20 @@ def _detect_format_version(dataset_path: Path) -> str:
     Detection order:
 
     1. If ``meta/info.json`` exists and contains ``codebase_version``,
-       use it to determine major version.
+        return the declared version **as-is** (normalized to a leading
+        ``v``), so reports record what the dataset actually declares
+        (e.g. ``v2.0`` stays ``v2.0``, not silently folded into v2.1).
     2. Otherwise, if ``meta/episodes.jsonl`` exists, infer v2.1.
     3. Otherwise, if ``meta/episodes/`` directory exists, infer v3.0.
     4. Otherwise, default to "v3.0" (let existing code raise its
-       own descriptive error).
+        own descriptive error).
 
     Args:
         dataset_path: Root path of the LeRobot dataset.
 
     Returns:
-        Version string: ``"v2.1"`` or ``"v3.0"``.
+        Version string: e.g. ``"v2.0"``, ``"v2.1"`` or ``"v3.0"``.
+        Callers treat any ``v2.*`` as the v2.x layout family.
     """
     info_path = dataset_path / "meta" / "info.json"
     if info_path.exists():
@@ -121,10 +124,9 @@ def _detect_format_version(dataset_path: Path) -> str:
                 info = json.load(f)
             version = info.get("codebase_version", "")
             if version:
-                if version.startswith("v2") or version.startswith("2"):
-                    return "v2.1"
-                if version.startswith("v3") or version.startswith("3"):
-                    return "v3.0"
+                normalized = version if version.startswith("v") else "v" + version
+                if normalized.startswith("v2") or normalized.startswith("v3"):
+                    return normalized
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -562,6 +564,45 @@ def _load_tasks_parquet_v30(dataset_path: Path) -> Dict[int, str]:
     return mapping
 
 
+def _load_tasks_jsonl_v21(dataset_path: Path) -> Dict[int, str]:
+    """Load task descriptions from ``meta/tasks.jsonl`` (v2.x format).
+
+    Each line is a JSON object mapping one task index to its description::
+
+        {"task_index": 0, "task": "pick up the red block"}
+
+    This is the v2.x counterpart of ``meta/tasks.parquet`` (v3.0). Returns
+    an empty mapping if the file is absent or unparseable.
+    """
+    tasks_path = dataset_path / "meta" / "tasks.jsonl"
+    if not tasks_path.exists():
+        return {}
+
+    mapping: Dict[int, str] = {}
+    try:
+        with open(tasks_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    task_index = int(record["task_index"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                task = record.get("task")
+                if task is not None:
+                    mapping[task_index] = str(task)
+    except OSError:
+        return {}
+    return mapping
+
+
 # Backwards-compatible alias
 _load_episode_metadata = _load_episode_metadata_v30
 
@@ -830,10 +871,11 @@ def _read_episode_parquet_v21(
     ep_meta_row: dict,
     fps: int,
     file_index: Optional[Dict[int, Path]] = None,
+    format_version: str = "v2.1",
 ) -> EpisodeData:
-    """Read a single episode from its parquet file (v2.1 format).
+    """Read a single episode from its parquet file (v2.x format).
 
-    v2.1 stores one episode per file at
+    v2.x stores one episode per file at
     ``data/chunk-XXX/episode_XXXXXX.parquet``.
 
     Args:
@@ -843,6 +885,8 @@ def _read_episode_parquet_v21(
         file_index: Optional pre-built mapping from episode_index to
             parquet file path. If None, the index is built by scanning
             ``data/`` on first call (cached by caller for efficiency).
+        format_version: Declared dataset version (``v2.0``/``v2.1``);
+            recorded verbatim in the episode metadata.
 
     Returns:
         EpisodeData for this episode.
@@ -871,7 +915,7 @@ def _read_episode_parquet_v21(
     else:
         ep_df = df.reset_index(drop=True)
 
-    episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, "v2.1")
+    episode = _extract_episode_from_dataframe(ep_df, ep_index, fps, format_version)
     episode.meta["dataset_root"] = str(dataset_path)
     return episode
 
@@ -1009,14 +1053,17 @@ def load_lerobot_dataset(path: str) -> DatasetInfo:
         if num_tasks:
             meta["num_tasks"] = num_tasks
         tasks = _load_tasks_parquet_v30(dataset_path)
+        if not tasks:
+            # v2.x datasets store the mapping in meta/tasks.jsonl instead.
+            tasks = _load_tasks_jsonl_v21(dataset_path)
         if tasks:
             meta["tasks"] = tasks
 
         # If info.json doesn't have total_episodes / total_frames,
-        # compute them from episode metadata (common in v2.1).
+        # compute them from episode metadata (common in v2.x).
         if not num_episodes or not total_frames:
             try:
-                if format_version == "v2.1":
+                if format_version.startswith("v2"):
                     ep_meta = _load_episode_metadata_v21(dataset_path)
                 else:
                     ep_meta = _load_episode_metadata_v30(dataset_path)
@@ -1145,12 +1192,16 @@ def iter_episodes(
 
         format_version = _detect_format_version(dataset_path)
 
-        if format_version == "v2.1":
+        if format_version.startswith("v2"):
+            # v2.x layout family (v2.0 / v2.1 share the same file layout)
             ep_metadata = _load_episode_metadata_v21(dataset_path)
             # Build file index once for efficiency
             file_index = _build_episode_file_index_v21(dataset_path)
-            # Extract video features definition from info.json for v2.1
+            # Extract video features definition from info.json for v2.x
             v21_video_features_template = _extract_video_features_for_v21(info, 0)
+            # v2.x stores the task_index -> description mapping in
+            # meta/tasks.jsonl (one JSON object per line).
+            tasks_map = _load_tasks_jsonl_v21(dataset_path)
 
             count = 0
             for _, ep_row in ep_metadata.iterrows():
@@ -1158,22 +1209,33 @@ def iter_episodes(
                     break
                 try:
                     ep = _read_episode_parquet_v21(
-                        dataset_path, ep_row, fps, file_index=file_index
+                        dataset_path, ep_row, fps,
+                        file_index=file_index, format_version=format_version,
                     )
                     if joint_limits:
                         ep.meta["joint_limits"] = joint_limits
                     if declared_features:
                         ep.meta["declared_features"] = declared_features
-                    # Inject video_features for v2.1 format
+                    # Inject video_features for v2.x format
                     ep_idx = int(ep_row["episode_index"])
                     v21_vf = _extract_video_features_for_v21(info, ep_idx)
                     if v21_vf:
                         # Add from_timestamp and to_timestamp for each video feature
-                        # In v2.1, each episode has its own video file
+                        # In v2.x, each episode has its own video file
                         for feat_key in v21_vf:
                             v21_vf[feat_key]["from_timestamp"] = 0.0
                             v21_vf[feat_key]["to_timestamp"] = ep.num_frames / fps if fps else 0.0
                         ep.meta["video_features"] = v21_vf
+                    # Task description: prefer the declared tasks.jsonl
+                    # mapping (keyed by the per-frame task_index); fall back
+                    # to the episode's own single-element "tasks" list in
+                    # episodes.jsonl.
+                    if tasks_map:
+                        ti = ep.meta.get("task_index")
+                        if ti is not None and int(ti) in tasks_map:
+                            ep.meta["task_description"] = tasks_map[int(ti)]
+                    elif isinstance(ep_row.get("tasks"), list) and len(ep_row["tasks"]) == 1:
+                        ep.meta["task_description"] = str(ep_row["tasks"][0])
                     ep.meta["fps"] = fps
                     yield ep
                 except (OSError, ValueError, KeyError, AttributeError) as e:
