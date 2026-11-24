@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.12.6 - 2026-11-24
+
+### Fixed
+- **LeRobot v2.0 数据集没有独立支持：被静默归并为 v2.1，报告版本标注错误（P1）**。
+  `_detect_format_version` 旧实现把任何以 `v2`/`2` 开头的 `codebase_version`
+  一律返回 `"v2.1"`，v2.0 数据集的审计报告因此写错版本号。现改为**原样返回
+  声明版本**（前缀归一化为 `v`）；下游两处 `== "v2.1"` 分支改为
+  `startswith("v2")`（v2.0/v2.1 共用 v2.x 布局族，文件布局相同——布局参考
+  huggingface/lerobot `convert_dataset_v21_to_v30.py`）。
+  JSON 报告 `dataset` 段新增 `format_version` 字段（此前报告不携带版本号）。
+- **v2.x 的 `meta/tasks.jsonl` 从未被读取，episode 丢失任务描述（P3）**。
+  v2.x 每行一个 `{"task_index": N, "task": "..."}` 对象。现按 tasks.jsonl
+  优先、`meta/episodes.jsonl` 单元素 `tasks` 字段兜底注入
+  `task_description`；`load_lerobot_dataset` 的 `meta["tasks"]` 映射也补了
+  jsonl 回退。
+- **`DatasetView.video_payload_files` 只认 v3.0 视频布局**：v2.x 的
+  `videos/chunk-*/<feature>/episode_*.mp4` 一个都找不到，视频载荷被记成
+  `undownloaded`。现补 v2.x 布局分支，与 0.12.5 的 #2/#4（data 与 episode
+  元数据路径）互补，凑齐 v2.x 三处路径支持。
+- 新增 `tests/test_lerobot_v20_format.py` 18 项回归：版本检测原样返回
+  （含 `2.1`→`v2.1` 前缀归一化、无 info.json 的结构回退）、任务描述注入、
+  v2.0 全链路 audit、`DatasetView` v2.x 路径解析、v3.0 布局无回归。
+
 ## 0.12.5 - 2026-11-17
 
 ### Fixed
