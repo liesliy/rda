@@ -1,8 +1,8 @@
 # Server deploy verification (engine_version=2)
 
 **When**: 2026-08-18, after the v0.5.2 server-side deploy.
-**Endpoint**: `https://rda.niusu2026.cn` (self-hosted on TencentCloud Lighthouse,
-Ubuntu 24.04, systemd unit `rda-api`, uvicorn `server.main:app`).
+**Endpoint**: `https://rda.niusu2026.cn` — a public API endpoint. Deployment
+and infrastructure details are intentionally out of scope for this repo.
 
 ## What was verified
 
@@ -47,26 +47,25 @@ curl -s -o /dev/null -w '%{http_code}' -X POST .../api/v1/recommend \
 
 ## Deploy gotcha (recorded for future-you)
 
-First deploy attempt copied `server/` to `/opt/rda-api/` (repo root). The
-systemd unit actually loads `/opt/rda-api/server/` (uvicorn
-`server.main:app`), so the root copy did nothing — `engine_version` stayed
-at the old value. Fix: copy into the `server/` subdirectory, restart unit.
-Now part of the deploy checklist.
+The first deploy put the files one directory above where the service loads
+them, so `engine_version` stayed at the old value. Fix: deploy into the
+directory the service actually loads, then restart it. Directory-layout
+verification is now part of the deploy checklist.
 
 ## What this does NOT prove
 
 - It proves the deployed engine is bilingual and reachable. It does **not**
   prove the recommendation *logic* is correct — only that the plumbing
-  works. A labelled-dataset benchmark of recommendation quality is roadmap
-  L2.
+  works. A labelled-dataset benchmark of recommendation quality is not done
+  yet.
 - The `rda.niusu2026.cn` endpoint is the author's own deployment. Users who
   self-host (set `RDA_API_URL`) get the same engine code but this write-up
   makes no claim about their uptime or parity — that's their responsibility.
 
 ## Backing artifact
 
-- Engine code: [`server/engine_core.py`](../server/engine_core.py) (not
-  shipped to PyPI — see [wheel_leak_guard.md](./wheel_leak_guard.md)).
+- Engine code: server-side, not shipped to PyPI — see
+  [wheel_leak_guard.md](./wheel_leak_guard.md).
 - Client: [`rda/recommend/api_client.py`](../rda/recommend/api_client.py).
 - This is a live-server check, not a committed test. Re-run the curl
   commands above to reproduce.

@@ -4,6 +4,8 @@
 # 设计原则（v0.7.3+）：
 #   * 服务端私仓不在 GitHub 公开仓库里 → 不预设默认文件，每次部署必须显式给
 #     "<本地相对仓库根路径>:<远端绝对路径>" 配对，避免错把客户端代码推到服务端
+#   * 主机、账号、私钥、服务名与部署路径全部由环境变量提供；本仓库不保存
+#     任何生产环境默认值。公开仓库携带这些信息等于公开一份攻击面地图。
 #   * 备份命名 .bak-YYYYMMDDTHHMMSSZ 与服务端 .bak-YYYYMMDD 共存（不冲突）
 #   * 用 systemd restart 而不是手工 kill，is-active 确认状态
 #   * 每次同步必须 smoke POST /api/v1/recommend，health 不走 recommend 路径
@@ -14,21 +16,20 @@
 #   scripts/deploy_api.sh --skip-smoke   <pairs...>
 #   scripts/deploy_api.sh --no-restart   <pairs...>
 #
-# 示例：
-#   scripts/deploy_api.sh \
-#       rda/recommend/engine.py:/opt/rda-api/server/engine_core.py \
-#       rda/recommend/formatter.py:/opt/rda-api/server/formatter.py
+# 示例（主机与路径均为占位，实际值由环境变量给出）：
+#   RDA_API_HOST=your-host RDA_API_USER=your-user \
+#   RDA_API_SSH_KEY=/path/to/key RDA_API_SERVICE=your-service \
+#   RDA_API_BASE_URL=https://your-api.example.com \
+#     scripts/deploy_api.sh <server_file>:/absolute/remote/path
 #
-#   scripts/deploy_api.sh --rollback /opt/rda-api/server/engine_core.py
-#
-# 环境变量覆盖：
-#   RDA_API_HOST          远端主机（默认 49.233.206.42）
-#   RDA_API_USER          SSH 用户（默认 ubuntu）
-#   RDA_API_SSH_KEY       私钥路径（默认 E:/下载的软件包/minilm-L6-V6/workbuddy.pem）
-#   RDA_API_LOCAL_PORT       服务端绑的 loopback 端口（默认 8100，等就绪探测用）
-#   RDA_API_BASE_URL      smoke 测试的公网入口（默认 https://rda.niusu2026.cn）
-#   RDA_API_SERVICE       systemd 服务名（默认 rda-api）
-#   RDA_API_REQUIRE_SERVER_MARKER  本地源必须含服务端标记才放行（默认 true）
+# 环境变量（除末尾两个开关外均必填，无内置默认值）：
+#   RDA_API_HOST                   远端主机
+#   RDA_API_USER                   SSH 用户
+#   RDA_API_SSH_KEY                SSH 私钥路径
+#   RDA_API_SERVICE                systemd 服务名
+#   RDA_API_BASE_URL               smoke 测试的公网入口
+#   RDA_API_LOCAL_PORT             服务端 loopback 端口（默认 8100）
+#   RDA_API_REQUIRE_SERVER_MARKER  本地源必须含服务端标记（默认 true）
 #
 # 退出码：
 #   0 部署成功（含 smoke 通过）
@@ -40,12 +41,13 @@
 set -euo pipefail
 
 # -------- 配置 --------
-RDA_API_HOST="${RDA_API_HOST:-49.233.206.42}"
-RDA_API_USER="${RDA_API_USER:-ubuntu}"
-RDA_API_SSH_KEY="${RDA_API_SSH_KEY:-E:/下载的软件包/minilm-L6-V6/workbuddy.pem}"
-RDA_API_LOCAL_PORT="${RDA_API_LOCAL_PORT:-8100}"          # ssh 内网 ss 探测用
-RDA_API_BASE_URL="${RDA_API_BASE_URL:-https://rda.niusu2026.cn}"   # 公网 smoke 用
-RDA_API_SERVICE="${RDA_API_SERVICE:-rda-api}"
+# 环境相关信息一律由调用方注入；仓库内不保留任何默认值。
+RDA_API_HOST="${RDA_API_HOST:-}"
+RDA_API_USER="${RDA_API_USER:-}"
+RDA_API_SSH_KEY="${RDA_API_SSH_KEY:-}"
+RDA_API_LOCAL_PORT="${RDA_API_LOCAL_PORT:-8100}"          # ssh 内网 ss 探测用，非敏感
+RDA_API_BASE_URL="${RDA_API_BASE_URL:-}"                 # 公网 smoke 用
+RDA_API_SERVICE="${RDA_API_SERVICE:-}"
 RDA_API_REQUIRE_SERVER_MARKER="${RDA_API_REQUIRE_SERVER_MARKER:-true}"
 
 # -------- 路径推导 --------
@@ -69,7 +71,7 @@ fail()  {
     exit "$code"
 }
 
-usage() { sed -n '2,32p' "$0"; }
+usage() { sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d'; }
 
 # -------- 参数解析 --------
 SMOKE=true
@@ -104,6 +106,23 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# -------- 必填环境变量校验 --------
+# --smoke-only 走公网入口，不需要 SSH 通道；其余模式按实际用到的变量分别校验。
+NEED_SSH=false
+if [ "$SKIP_PUSH" = false ] || [ "$RESTART" = true ] || [ "$SKIP_BACKUP" = false ] || [ -n "$ROLLBACK_REMOTE" ]; then
+    NEED_SSH=true
+fi
+if [ "$NEED_SSH" = true ]; then
+    for v in RDA_API_HOST RDA_API_USER RDA_API_SSH_KEY RDA_API_SERVICE; do
+        if [ -z "${!v:-}" ]; then
+            fail 1 "缺少环境变量 ${v}（本脚本不内置任何主机/凭据默认值，请通过环境变量提供）"
+        fi
+    done
+fi
+if [ "$SMOKE" = true ] && [ -z "$RDA_API_BASE_URL" ]; then
+    fail 1 "缺少环境变量 RDA_API_BASE_URL（smoke 测试入口）"
+fi
 
 # -------- 回滚分支 --------
 if [ -n "$ROLLBACK_REMOTE" ]; then
@@ -281,4 +300,4 @@ fi
 echo
 echo -e "${GREEN}${BOLD}========== 部署完成 ✓ ==========${NC}"
 echo "回滚命令: $0 --rollback <remote_abs_path>"
-echo "查看备份: ssh -i ${RDA_API_SSH_KEY} ${RDA_API_USER}@${RDA_API_HOST} 'ls -lt /opt/rda-api/server/*.bak-* | head'"
+echo "查看备份: 备份文件为 <remote_abs_path>.bak-*，回滚用 $0 --rollback <remote_abs_path>"

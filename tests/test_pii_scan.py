@@ -38,7 +38,7 @@ from rda.metrics.pii_scan import (
 
 CN_ID = "11010519491231002X"      # canonical example that satisfies checksum
 CN_MOBILE = "13812345678"
-CN_EMAIL = "wusheng@niusutech.com"
+CN_EMAIL = "contact@example.com"
 CN_MAC = "00:1B:44:11:3A:B7"
 
 
@@ -384,7 +384,7 @@ class TestTierInteraction:
         from rda.io import load_lerobot_dataset
 
         root = Path(os.environ.get(
-            "RDA_CLEAN_DATASET", "D:/workbuddy-data/datasets/rda_inject_clean"))
+            "RDA_CLEAN_DATASET", "./_local_datasets/rda_inject_clean"))
         if not root.exists():
             pytest.skip("fixture dataset not available")
 

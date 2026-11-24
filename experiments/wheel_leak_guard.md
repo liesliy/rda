@@ -4,12 +4,11 @@
 recommendation engine (`server/` and `engine_core`) never ships inside the
 PyPI wheel of `robot-data-audit`.
 
-**Why it matters**: RDA's Path B commercial model is "audit logic is
-open-source and visible in the wheel; recommendation logic is closed-source
-and lives on the server." If `server/` accidentally gets packaged, the
-closed-source boundary collapses and the model is voided. This is a
-single-line-of-config mistake that's easy to make and catastrophic to
-recover from (you can't un-publish a PyPI release, only yank it).
+**Why it matters**: `server/` holds a separately deployed component that is
+intentionally excluded from the public wheel. If it accidentally gets
+packaged, that packaging boundary collapses — and a PyPI release can't be
+un-published, only yanked. This is a single-line-of-config mistake that's
+easy to make and costly to recover from.
 
 ## The two layers of defense
 
@@ -70,14 +69,13 @@ print('engine_core leaked:', [x for x in n if 'engine_core' in x])
 
 ## What this does NOT prove
 
-- It proves the *packaged artifact* doesn't contain the closed source. It
-  does **not** prove the open-source `rda/` code can't *call* a closed
-  endpoint — it can, that's the design (`api_client.py` is open, the server
-  it calls is closed).
-- It doesn't prove the server-side engine matches what's described in
-  [`server_deploy_verify.md`](./server_deploy_verify.md). The server is
-  self-hosted by the author; users who self-deploy build from their own
-  `server/` checkout.
+- It proves the *packaged artifact* doesn't contain the server-side code. It
+  does **not** prove the open-source `rda/` code can't *call* a remote
+  endpoint — it can, that's the design (`api_client.py` is open, the service
+  it calls is separate).
+- It doesn't prove the deployed engine matches what's described in
+  [`server_deploy_verify.md`](./server_deploy_verify.md). That write-up is a
+  live-service check; users who self-host build from their own checkout.
 
 ## Backing artifact
 

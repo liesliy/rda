@@ -17,6 +17,7 @@ not the loader).
 
 from __future__ import annotations
 
+import os
 import sys
 import types
 from pathlib import Path
@@ -48,7 +49,7 @@ from rda.io.schema import DatasetInfo  # noqa: E402
 from rda.metrics.base import MetricAvailability, MetricResult  # noqa: E402
 from rda.metrics.visual_integrity import VIDEO_DEPS_MISSING  # noqa: E402
 
-DS_ROOT = Path(r"D:\workbuddy-data\datasets\libero_10")
+DS_ROOT = Path(os.environ.get("RDA_UI_DATASET", "./_local_datasets/libero_10"))
 
 
 def _make_result(n: int = 2) -> DatasetAuditResult:

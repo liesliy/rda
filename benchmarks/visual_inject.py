@@ -30,6 +30,7 @@ codec-identical frames exactly like a real camera stall.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -46,14 +47,18 @@ from rda.io.schema import EpisodeData  # noqa: E402
 from rda.metrics.visual_integrity import VideoFreezeMetric, _decode_span_gray  # noqa: E402
 from rda.metrics.visual_quality import VisualQualityMetric, _decode_one_gray  # noqa: E402
 
-DEFAULT_DATASET = r"D:\workbuddy-data\datasets\libero_10"
+# Real datasets live on the caller's machine, never in this repo. Point
+# RDA_DATASETS_DIR at your local dataset directory before running the benchmark.
+DATASETS_DIR = Path(os.environ.get("RDA_DATASETS_DIR", "./_local_datasets"))
+DEFAULT_DATASET = str(DATASETS_DIR / "libero_10")
+DEFAULT_PERF_DATASET = str(DATASETS_DIR / "refetch_jaco_play")
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 # Real-dataset roster for the distribution mode (REQ-10c).
 DISTRIBUTION_DATASETS = {
-    "libero_10": r"D:\workbuddy-data\datasets\libero_10",
-    "jaco_play": r"D:\workbuddy-data\datasets\refetch_jaco_play",
-    "xarm_lift": r"D:\workbuddy-data\datasets\refetch_xarm_lift_medium",
+    "libero_10": str(DATASETS_DIR / "libero_10"),
+    "jaco_play": str(DATASETS_DIR / "refetch_jaco_play"),
+    "xarm_lift": str(DATASETS_DIR / "refetch_xarm_lift_medium"),
 }
 
 
@@ -474,7 +479,7 @@ if __name__ == "__main__":
         n = int(sys.argv[2]) if len(sys.argv) > 2 else 10
         run_distribution(n)
     elif mode == "perf":
-        ds = sys.argv[2] if len(sys.argv) > 2 else r"D:\workbuddy-data\datasets\refetch_jaco_play"
+        ds = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_PERF_DATASET
         n = int(sys.argv[3]) if len(sys.argv) > 3 else 5
         run_perf(ds, n)
     else:

@@ -29,7 +29,6 @@ rda_report.json
 .DS_Store
 Thumbs.db
 benchmarks/results/
-benchmarks/results/
 
 # CodeAct runtime
 codeact/
@@ -37,8 +36,9 @@ codeact/
 # Demo outputs
 demo_output/
 
-# Dev plan (generated)
+# Internal / strategy docs (generated locally, never commit)
 RDA开发计划表.html
+RDA开源闭源拆分方案.html
 
 # Local agent notes (machine-specific)
 CODEBUDDY.md

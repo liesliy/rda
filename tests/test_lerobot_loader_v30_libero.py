@@ -22,7 +22,7 @@ from rda.io.lerobot_loader import (  # noqa: E402
 
 
 DATASET_PATH = Path(
-    os.environ.get("LIBERO_DATASET_PATH", "D:/workbuddy-data/datasets/libero")
+    os.environ.get("LIBERO_DATASET_PATH", "./_local_datasets/libero")
 )
 
 
